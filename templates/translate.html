@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+   <meta charset="UTF-8">
+   <title>Manga Translator - Results</title>
+   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+   <link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,100..900;1,100..900&display=swap"
+      rel="stylesheet">
+</head>
+
+<!-- JSZip library for client-side ZIP creation (much faster than server-side) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
+<body>
+   <header>
+   </header>
+
+   <div class="results-container">
+      <h2 class="results-title">✨ Kết quả dịch ({{ images|length }} ảnh)</h2>
+
+      {% if images %}
+      <div class="image-gallery">
+         {% for img in images %}
+         <div class="image-card">
+            <img class="gallery-image" src="data:image/jpeg;base64,{{ img.data }}" alt="{{ img.name }}">
+            <div class="image-info">
+               <span class="image-name">{{ img.name }}</span>
+               <a href="#" class="download-btn" data-image="{{ img.data }}" data-name="{{ img.name }}">
+                  💾 Download
+               </a>
+            </div>
+         </div>
+         {% endfor %}
+      </div>
+      {% else %}
+      <p class="no-images">Không có ảnh nào được xử lý.</p>
+      {% endif %}
+   </div>
+
+   <div class="buttons_image">
+      <a href="#" class="green" id="download-zip">📦 Download ZIP</a>
+      <a href="/" class="red">← Quay lại</a>
+   </div>
+
+</body>
+<script>
+   // Helper: Convert base64 to binary data
+   function base64ToBlob(base64, mimeType = 'image/png') {
+      const byteChars = atob(base64);
+      const byteArrays = [];
+      for (let offset = 0; offset < byteChars.length; offset += 512) {
+         const slice = byteChars.slice(offset, offset + 512);
+         const byteNumbers = new Array(slice.length);
+         for (let i = 0; i < slice.length; i++) {
+            byteNumbers[i] = slice.charCodeAt(i);
+         }
+         byteArrays.push(new Uint8Array(byteNumbers));
+      }
+      return new Blob(byteArrays, { type: mimeType });
+   }
+
+   // Download single image
+   document.querySelectorAll('.download-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+         e.preventDefault();
+         const imageData = btn.getAttribute('data-image');
+         const imageName = btn.getAttribute('data-name');
+         const a = document.createElement('a');
+         a.href = 'data:image/png;base64,' + imageData;
+         a.download = imageName + '_translated.png';
+         a.click();
+      });
+   });
+
+   // Download all images as ZIP (client-side - fast!)
+   document.getElementById('download-zip').addEventListener('click', async (e) => {
+      e.preventDefault();
+
+      const btn = e.target;
+      const originalText = btn.textContent;
+      btn.textContent = '⏳ Đang tạo ZIP...';
+      btn.style.pointerEvents = 'none';
+
+      try {
+         const zip = new JSZip();
+         const folder = zip.folder('manga_translated');
+
+         // Collect all images and add to ZIP
+         document.querySelectorAll('.download-btn').forEach((imgBtn, index) => {
+            const name = imgBtn.getAttribute('data-name');
+            const data = imgBtn.getAttribute('data-image');
+
+            // Convert base64 to binary and add to ZIP
+            const binaryData = atob(data);
+            folder.file(`${name}_translated.png`, binaryData, { binary: true });
+         });
+
+         // Generate ZIP and trigger download
+         const content = await zip.generateAsync({
+            type: 'blob',
+            compression: 'DEFLATE',
+            compressionOptions: { level: 6 }
+         });
+
+         // Create download link
+         const url = URL.createObjectURL(content);
+         const a = document.createElement('a');
+         a.href = url;
+         a.download = 'manga_translated.zip';
+         a.click();
+         URL.revokeObjectURL(url);
+
+         btn.textContent = '✅ Đã tải xong!';
+         setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.pointerEvents = 'auto';
+         }, 2000);
+
+      } catch (error) {
+         console.error('ZIP creation failed:', error);
+         btn.textContent = '❌ Lỗi tạo ZIP';
+         setTimeout(() => {
+            btn.textContent = originalText;
+            btn.style.pointerEvents = 'auto';
+         }, 2000);
+      }
+   });
+</script>
+
+</html>
