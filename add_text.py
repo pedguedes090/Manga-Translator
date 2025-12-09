@@ -149,7 +149,7 @@ def calculate_optimal_font_size(text, w, h, font_path):
 
 
 
-def add_text(image, text, font_path, bubble_contour):
+def add_text(image, text, font_path, bubble_contour, text_color=(0, 0, 0)):
     """
     Add text inside a speech bubble contour with dynamic font sizing.
 
@@ -158,6 +158,8 @@ def add_text(image, text, font_path, bubble_contour):
         text (str): Text to be placed inside the speech bubble.
         font_path (str): Font path.
         bubble_contour (numpy.ndarray): Contour of the detected speech bubble.
+        text_color (tuple): RGB color for text. Default is black (0,0,0).
+                           Use (255,255,255) for white text on dark bubbles.
 
     Returns:
         numpy.ndarray: Image with text placed inside the speech bubble.
@@ -190,7 +192,7 @@ def add_text(image, text, font_path, bubble_contour):
         # Horizontal centering
         text_x = x + (w - text_length) // 2
 
-        draw.text((text_x, text_y), line, font=font, fill=(0, 0, 0))
+        draw.text((text_x, text_y), line, font=font, fill=text_color)
         text_y += line_height
 
     image[:, :, :] = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)

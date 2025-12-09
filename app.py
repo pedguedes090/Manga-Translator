@@ -4,7 +4,7 @@ import io
 import zipfile
 import json
 from detect_bubbles import detect_bubbles
-from process_bubble import process_bubble
+from process_bubble import process_bubble, process_bubble_auto, is_dark_bubble
 from translator.translator import MangaTranslator
 from add_text import add_text
 from manga_ocr import MangaOcr
@@ -31,13 +31,13 @@ def home():
     return render_template("index.html")
 
 
-def process_single_image(image, manga_translator, mocr, selected_translator, selected_font, font_analyzer=None):
+def process_single_image(image, manga_translator, mocr, selected_translator, selected_font, font_analyzer=None, enable_black_bubble=True):
     """Process a single image and return the translated version.
     
     Optimized with batch translation for Gemini to reduce API calls.
     Supports auto font matching when font_analyzer is provided and selected_font is 'auto'.
     """
-    results = detect_bubbles(MODEL_PATH, image)
+    results = detect_bubbles(MODEL_PATH, image, enable_black_bubble)
     
     if not results:
         return image
@@ -48,7 +48,13 @@ def process_single_image(image, manga_translator, mocr, selected_translator, sel
     first_bubble_image = None  # For font analysis
     
     for result in results:
-        x1, y1, x2, y2, score, class_id = result
+        # Handle both old format (6 items) and new format (7 items with is_dark_bubble)
+        if len(result) >= 7:
+            x1, y1, x2, y2, score, class_id, is_dark = result[:7]
+        else:
+            x1, y1, x2, y2, score, class_id = result[:6]
+            is_dark = 0
+        
         detected_image = image[int(y1):int(y2), int(x1):int(x2)]
         
         # Save first bubble for font analysis (before processing)
@@ -59,12 +65,14 @@ def process_single_image(image, manga_translator, mocr, selected_translator, sel
         im = Image.fromarray(detected_image)
         text = mocr(im)
         
-        detected_image, cont = process_bubble(detected_image)
+        # Use auto detection or forced dark based on detection flag
+        detected_image, cont, bubble_is_dark = process_bubble_auto(detected_image, force_dark=(is_dark == 1))
         
         bubble_data.append({
             'detected_image': detected_image,
             'contour': cont,
-            'coords': (int(x1), int(y1), int(x2), int(y2))
+            'coords': (int(x1), int(y1), int(x2), int(y2)),
+            'is_dark': bubble_is_dark
         })
         texts_to_translate.append(text)
     
@@ -124,7 +132,9 @@ def process_single_image(image, manga_translator, mocr, selected_translator, sel
     # Determine correct font path based on font name
     font_path = get_font_path(selected_font)
     for data, translated_text in zip(bubble_data, translated_texts):
-        add_text(data['detected_image'], translated_text, font_path, data['contour'])
+        # Use white text for dark bubbles, black text for light bubbles
+        text_color = (255, 255, 255) if data.get('is_dark', False) else (0, 0, 0)
+        add_text(data['detected_image'], translated_text, font_path, data['contour'], text_color)
     
     return image
 
@@ -141,7 +151,7 @@ def get_font_path(font_name: str) -> str:
         return f"fonts/{font_name}.ttf"
 
 
-def process_images_with_batch(images_data, manga_translator, mocr, selected_font, translator_type, batch_size=10, use_context_memory=True):
+def process_images_with_batch(images_data, manga_translator, mocr, selected_font, translator_type, batch_size=10, use_context_memory=True, enable_black_bubble=True):
     """
     Process multiple images with multi-page batching for Copilot or Gemini.
     Collects all texts first, batch translates, then applies translations.
@@ -199,7 +209,7 @@ def process_images_with_batch(images_data, manga_translator, mocr, selected_font
         emit_progress('detection', idx + 1, total_images, f'Phát hiện bubbles: {name}')
         print(f"  [{idx+1}/{total_images}] {name}", end="", flush=True)
         
-        results = detect_bubbles(MODEL_PATH, image)
+        results = detect_bubbles(MODEL_PATH, image, enable_black_bubble)
         if not results:
             all_pages_data[name] = {'image': image, 'bubbles': [], 'texts': []}
             print(f" - 0 bubbles")
@@ -210,20 +220,27 @@ def process_images_with_batch(images_data, manga_translator, mocr, selected_font
         bubble_data = []
         
         for bubble_idx, result in enumerate(results):
-            x1, y1, x2, y2, score, class_id = result
+            # Handle both old format (6 items) and new format (7 items with is_dark_bubble)
+            if len(result) >= 7:
+                x1, y1, x2, y2, score, class_id, is_dark = result[:7]
+            else:
+                x1, y1, x2, y2, score, class_id = result[:6]
+                is_dark = 0
+            
             detected_image = image[int(y1):int(y2), int(x1):int(x2)]
             
-            # IMPORTANT: Add to OCR queue BEFORE processing (which fills white)
+            # IMPORTANT: Add to OCR queue BEFORE processing (which fills white/black)
             all_bubble_images.append(Image.fromarray(detected_image.copy()))
             bubble_mapping.append((name, bubble_idx))
             
-            # Process bubble (fill white) - this modifies the original image via view
-            processed_image, cont = process_bubble(detected_image)
+            # Process bubble (fill white or black based on type)
+            processed_image, cont, bubble_is_dark = process_bubble_auto(detected_image, force_dark=(is_dark == 1))
             
             bubble_data.append({
                 'detected_image': processed_image,
                 'contour': cont,
-                'coords': (int(x1), int(y1), int(x2), int(y2))
+                'coords': (int(x1), int(y1), int(x2), int(y2)),
+                'is_dark': bubble_is_dark
             })
         
         all_pages_data[name] = {
@@ -337,8 +354,10 @@ def process_images_with_batch(images_data, manga_translator, mocr, selected_font
             x1, y1, x2, y2 = bubble['coords']
             # Get the region in the original image (this is a view, modifications affect original)
             bubble_region = image[y1:y2, x1:x2]
+            # Use white text for dark bubbles, black text for light bubbles
+            text_color = (255, 255, 255) if bubble.get('is_dark', False) else (0, 0, 0)
             # Add translated text
-            add_text(bubble_region, text, font_path, bubble['contour'])
+            add_text(bubble_region, text, font_path, bubble['contour'], text_color)
         
         processed_results.append({
             'image': image,
@@ -381,6 +400,9 @@ def upload_file():
     
     # Get context memory setting (checkbox - "on" if checked, None if not)
     use_context_memory = request.form.get("context_memory") == "on"
+
+    # Get black bubble detection setting (checkbox - "on" if checked, None if not)
+    enable_black_bubble = request.form.get("detect_black_bubbles") == "on"
 
     # Get font selection
     selected_font_raw = request.form["selected_font"]
@@ -520,7 +542,7 @@ def upload_file():
         # Auto font: analyze first image
         if selected_font == "auto" and font_analyzer is not None:
             try:
-                results = detect_bubbles(MODEL_PATH, all_images[0]['image'])
+                results = detect_bubbles(MODEL_PATH, all_images[0]['image'], enable_black_bubble)
                 if results:
                     x1, y1, x2, y2, _, _ = results[0]
                     first_bubble = all_images[0]['image'][int(y1):int(y2), int(x1):int(x2)]
@@ -562,7 +584,8 @@ def upload_file():
         processed_results = process_images_with_batch(
             all_images, manga_translator, mocr, selected_font, 
             translator_type=selected_translator, batch_size=10,
-            use_context_memory=use_context_memory
+            use_context_memory=use_context_memory,
+            enable_black_bubble=enable_black_bubble
         )
         
         # Encode results to base64
@@ -593,7 +616,7 @@ def upload_file():
                     # Auto font: analyze FIRST image only
                     if selected_font == "auto" and font_analyzer is not None and not auto_font_determined:
                         try:
-                            results = detect_bubbles(MODEL_PATH, image)
+                            results = detect_bubbles(MODEL_PATH, image, enable_black_bubble)
                             if results:
                                 x1, y1, x2, y2, _, _ = results[0]
                                 first_bubble = image[int(y1):int(y2), int(x1):int(x2)]
@@ -612,7 +635,8 @@ def upload_file():
                     # Process image
                     processed_image = process_single_image(
                         image, manga_translator, mocr, 
-                        selected_translator, selected_font, None
+                        selected_translator, selected_font, None,
+                        enable_black_bubble=enable_black_bubble
                     )
                     
                     # Encode to base64

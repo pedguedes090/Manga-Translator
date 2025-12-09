@@ -3,10 +3,15 @@ Chrome Lens OCR module using chrome-lens-py library.
 Provides OCR functionality using Google Lens API.
 """
 import asyncio
+import random
 from PIL import Image
 import numpy as np
 
 from chrome_lens_py import LensAPI
+
+# Limit concurrent requests to avoid overwhelming the API
+# Balance: 15 is fast enough while reducing 502 errors
+MAX_CONCURRENT_OCR = 10
 
 
 class ChromeLensOCR:
@@ -20,15 +25,18 @@ class ChromeLensOCR:
     - Batch processing for faster multi-image OCR
     """
     
-    def __init__(self, ocr_language: str = "ja"):
+    def __init__(self, ocr_language: str = "ja", max_concurrent: int = MAX_CONCURRENT_OCR):
         """
         Initialize Chrome Lens OCR.
         
         Args:
             ocr_language: BCP 47 language code for OCR (default: "ja" for Japanese)
+            max_concurrent: Maximum concurrent OCR requests (default: 10)
         """
         self.api = LensAPI()
         self.ocr_language = ocr_language
+        self.max_concurrent = max_concurrent
+        self._semaphore = None  # Created lazily when needed
     
     def __call__(self, image) -> str:
         """
@@ -58,25 +66,62 @@ class ChromeLensOCR:
                 self._loop = asyncio.new_event_loop()
             return self._loop.run_until_complete(self._process(image))
     
-    async def _process(self, image) -> str:
+    async def _process(self, image, max_retries: int = 5) -> str:
         """
         Async method to process image with Chrome Lens API.
+        Includes retry logic with exponential backoff + jitter for server errors.
+        Uses semaphore to limit concurrent requests.
         
         Args:
             image: PIL Image, file path, or URL
+            max_retries: Maximum number of retry attempts for server errors
             
         Returns:
             str: Extracted text
         """
-        try:
-            result = await self.api.process_image(
-                image_path=image,
-                ocr_language=self.ocr_language
-            )
-            return result.get("ocr_text", "")
-        except Exception as e:
-            print(f"Chrome Lens OCR error: {e}")
-            return ""
+        # Create semaphore lazily (must be done in async context)
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self.max_concurrent)
+        
+        last_error = None
+        
+        # Use semaphore to limit concurrent requests
+        async with self._semaphore:
+            for attempt in range(max_retries):
+                try:
+                    # Add small random delay before each request to spread load
+                    if attempt == 0:
+                        await asyncio.sleep(random.uniform(0.1, 0.5))
+                    
+                    result = await self.api.process_image(
+                        image_path=image,
+                        ocr_language=self.ocr_language
+                    )
+                    return result.get("ocr_text", "")
+                except Exception as e:
+                    last_error = e
+                    error_str = str(e)
+                    
+                    # Check if it's a retryable server error (502, 503, 504, 429)
+                    is_server_error = any(code in error_str for code in ['502', '503', '504', '429'])
+                    
+                    if is_server_error and attempt < max_retries - 1:
+                        # Exponential backoff with jitter: 2-4s, 4-8s, 8-16s, 16-32s
+                        base_wait = 2 ** (attempt + 1)
+                        jitter = random.uniform(0, base_wait)
+                        wait_time = base_wait + jitter
+                        print(f"Server error (attempt {attempt + 1}/{max_retries}), retrying in {wait_time:.1f}s...")
+                        await asyncio.sleep(wait_time)
+                    elif is_server_error:
+                        print(f"Chrome Lens OCR failed after {max_retries} attempts: {e}")
+                        return ""
+                    else:
+                        # Non-retryable error, fail immediately
+                        print(f"Chrome Lens OCR error: {e}")
+                        return ""
+        
+        print(f"Chrome Lens OCR error: {last_error}")
+        return ""
     
     def process_batch(self, images: list) -> list:
         """
@@ -111,7 +156,8 @@ class ChromeLensOCR:
     
     async def _process_batch(self, images: list) -> list:
         """
-        Async batch processing using asyncio.gather for concurrent OCR.
+        Async batch processing with concurrency limiting.
+        The semaphore in _process ensures only MAX_CONCURRENT_OCR requests run at once.
         
         Args:
             images: List of PIL Images
@@ -119,19 +165,39 @@ class ChromeLensOCR:
         Returns:
             list: List of extracted texts
         """
-        # Process all images concurrently
+        print(f"Processing {len(images)} images with max {self.max_concurrent} concurrent requests...")
+        
+        # Create tasks - semaphore in _process limits actual concurrent execution
         tasks = [self._process(img) for img in images]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
-        # Handle any exceptions
+        # Handle any exceptions with detailed logging
         processed = []
-        for r in results:
-            if isinstance(r, Exception):
-                print(f"Batch OCR error: {r}")
-                processed.append("")
-            else:
-                processed.append(r)
+        success_count = 0
+        empty_count = 0
+        error_count = 0
         
+        for i, r in enumerate(results):
+            if isinstance(r, Exception):
+                print(f"  [Bubble {i+1}] ERROR: {r}")
+                processed.append("")
+                error_count += 1
+            elif r:  # Non-empty result
+                # Truncate long text for logging
+                preview = r[:50].replace('\n', ' ') + ('...' if len(r) > 50 else '')
+                print(f"  [Bubble {i+1}] OK: {preview}")
+                processed.append(r)
+                success_count += 1
+            else:  # Empty result
+                print(f"  [Bubble {i+1}] EMPTY (no text detected)")
+                processed.append("")
+                empty_count += 1
+        
+        print(f"\nOCR Summary:")
+        print(f"  ✓ Success: {success_count}/{len(images)}")
+        print(f"  ○ Empty (no text): {empty_count}/{len(images)}")
+        print(f"  ✗ Errors: {error_count}/{len(images)}")
+        print(f"OCR completed: {success_count}/{len(images)} successful")
         return processed
     
     async def process_with_blocks(self, image) -> dict:
@@ -171,4 +237,3 @@ class ChromeLensOCR:
         
         result = asyncio.run(self.process_with_blocks(image))
         return result.get("text_blocks", [])
-

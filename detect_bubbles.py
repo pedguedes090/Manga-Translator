@@ -15,6 +15,86 @@ WHITE_THRESHOLD = 245  # Pixel value to consider "white"
 BLACK_THRESHOLD = 15   # Pixel value to consider "black"
 IOU_THRESHOLD = 0.5    # For removing duplicate detections
 
+# Black bubble detection constants
+BLACK_BUBBLE_THRESHOLD = 50  # Max intensity for black regions
+BLACK_BUBBLE_MIN_AREA = 1000  # Minimum area in pixels
+BLACK_BUBBLE_MAX_AREA_RATIO = 0.4  # Maximum bubble area relative to image
+BLACK_BUBBLE_MIN_ASPECT = 0.2  # Minimum width/height ratio
+BLACK_BUBBLE_MAX_ASPECT = 5.0  # Maximum width/height ratio
+
+
+def detect_black_bubbles(image, min_area=None, max_area_ratio=None):
+    """
+    Detect black speech bubbles using OpenCV contour detection.
+    Used as fallback when YOLO doesn't detect dark bubbles.
+    
+    Args:
+        image: Input image (numpy array, BGR)
+        min_area: Minimum bubble area in pixels (default: BLACK_BUBBLE_MIN_AREA)
+        max_area_ratio: Maximum bubble area as ratio of image (default: BLACK_BUBBLE_MAX_AREA_RATIO)
+        
+    Returns:
+        list: Detections in format [x1, y1, x2, y2, confidence, class_id]
+    """
+    if min_area is None:
+        min_area = BLACK_BUBBLE_MIN_AREA
+    if max_area_ratio is None:
+        max_area_ratio = BLACK_BUBBLE_MAX_AREA_RATIO
+    
+    height, width = image.shape[:2]
+    max_area = int(width * height * max_area_ratio)
+    
+    # Convert to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    
+    # Find dark regions (invert threshold to get black areas)
+    _, thresh = cv2.threshold(gray, BLACK_BUBBLE_THRESHOLD, 255, cv2.THRESH_BINARY_INV)
+    
+    # Morphological operations to clean up
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+    
+    # Find contours
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    detections = []
+    
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        
+        # Filter by area
+        if area < min_area or area > max_area:
+            continue
+        
+        # Get bounding box
+        x, y, w, h = cv2.boundingRect(contour)
+        
+        # Filter by aspect ratio (bubbles are usually somewhat round/oval)
+        aspect_ratio = w / h if h > 0 else 0
+        if aspect_ratio < BLACK_BUBBLE_MIN_ASPECT or aspect_ratio > BLACK_BUBBLE_MAX_ASPECT:
+            continue
+        
+        # Filter: bubble should be mostly filled (not just a thin border)
+        rect_area = w * h
+        fill_ratio = area / rect_area if rect_area > 0 else 0
+        if fill_ratio < 0.3:  # At least 30% filled
+            continue
+        
+        # Check if region is actually dark (verify it's a black bubble)
+        roi = gray[y:y+h, x:x+w]
+        mean_intensity = np.mean(roi)
+        if mean_intensity > BLACK_BUBBLE_THRESHOLD + 30:  # Allow some tolerance
+            continue
+        
+        # Calculate confidence based on fill ratio and darkness
+        confidence = min(0.8, fill_ratio * (1 - mean_intensity / 255))
+        
+        x1, y1, x2, y2 = x, y, x + w, y + h
+        detections.append([x1, y1, x2, y2, confidence, 0])  # class_id=0 for speech bubble
+    
+    return detections
+
 
 def find_safe_cut_points(image, target_height=MAX_CHUNK_HEIGHT):
     """
@@ -220,18 +300,20 @@ def detect_bubbles_with_fallback(model, image):
     return merged
 
 
-def detect_bubbles(model_path, image_input):
+def detect_bubbles(model_path, image_input, enable_black_bubble=True):
     """
     Detects bubbles in an image using a YOLOv8 model.
+    Also detects black speech bubbles using OpenCV fallback (optional).
     Automatically handles long vertical images (webtoons) by slicing.
     
     Args:
         model_path (str): The file path to the YOLO model.
         image_input: File path to image OR numpy array (BGR).
+        enable_black_bubble (bool): Whether to detect black bubbles using OpenCV.
 
     Returns:
         list: A list containing the coordinates, score and class_id of 
-              the detected bubbles.
+              the detected bubbles. Each detection also includes is_dark_bubble flag.
     """
     global _yolo_model_cache
     
@@ -255,7 +337,7 @@ def detect_bubbles(model_path, image_input):
     height, width = image.shape[:2]
     aspect_ratio = height / width
     
-    # Check if image needs slicing (long vertical image)
+    # Get YOLO detections
     if aspect_ratio > MAX_ASPECT_RATIO:
         print(f"Long image detected: {width}x{height} (ratio: {aspect_ratio:.1f})")
         
@@ -264,14 +346,45 @@ def detect_bubbles(model_path, image_input):
         
         if cut_points:
             print(f"Found {len(cut_points)} safe cut points (gutters)")
-            return detect_bubbles_on_chunks(model, image, cut_points)
+            yolo_detections = detect_bubbles_on_chunks(model, image, cut_points)
         else:
             # Fallback to overlap-based slicing
-            return detect_bubbles_with_fallback(model, image)
+            yolo_detections = detect_bubbles_with_fallback(model, image)
     else:
         # Normal image - process directly
         bubbles = model(image, verbose=False)[0]
-        return bubbles.boxes.data.tolist()
+        yolo_detections = bubbles.boxes.data.tolist()
+    
+    # Get black bubble detections using OpenCV (if enabled)
+    if enable_black_bubble:
+        black_bubble_detections = detect_black_bubbles(image)
+    else:
+        black_bubble_detections = []
+    
+    if black_bubble_detections:
+        print(f"OpenCV found {len(black_bubble_detections)} potential black bubbles")
+        
+        # Mark black bubbles with a flag (append 1 to detection)
+        for det in black_bubble_detections:
+            det.append(1)  # is_dark_bubble = 1
+        
+        # Mark YOLO detections as normal bubbles
+        for det in yolo_detections:
+            if len(det) == 6:  # Only if not already marked
+                det.append(0)  # is_dark_bubble = 0
+        
+        # Merge all detections and remove duplicates
+        all_detections = yolo_detections + black_bubble_detections
+        merged = remove_duplicate_detections(all_detections)
+        
+        print(f"Total: {len(yolo_detections)} YOLO + {len(black_bubble_detections)} black = {len(merged)} after merge")
+        return merged
+    else:
+        # No black bubbles found, return YOLO only (add is_dark_bubble=0)
+        for det in yolo_detections:
+            if len(det) == 6:
+                det.append(0)
+        return yolo_detections
 
 
 def clear_model_cache():
