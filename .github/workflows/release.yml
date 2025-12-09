@@ -1,0 +1,160 @@
+name: Build and Release
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:  # Cho phép chạy thủ công
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+        
+    - name: Download YOLO model
+      run: |
+        # Tải model nếu cần (hoặc bỏ qua nếu model đã có trong repo)
+        echo "Model should be in model/ folder"
+        
+    - name: Build with PyInstaller
+      run: |
+        pyinstaller --noconfirm --onedir --windowed --name "MangaTranslator" ^
+          --add-data "templates;templates" ^
+          --add-data "static;static" ^
+          --add-data "fonts;fonts" ^
+          --add-data "model;model" ^
+          --add-data "ocr;ocr" ^
+          --add-data "translator;translator" ^
+          --hidden-import flask ^
+          --hidden-import flask_socketio ^
+          --hidden-import ultralytics ^
+          --hidden-import cv2 ^
+          --hidden-import PIL ^
+          --hidden-import torch ^
+          --hidden-import numpy ^
+          --collect-all ultralytics ^
+          app.py
+      shell: cmd
+        
+    - name: Create ZIP package
+      run: |
+        Compress-Archive -Path "dist\MangaTranslator\*" -DestinationPath "MangaTranslator-Windows-${{ github.ref_name }}.zip"
+      shell: powershell
+        
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: MangaTranslator-Windows-${{ github.ref_name }}.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: Upload Artifact (for manual runs)
+      uses: actions/upload-artifact@v4
+      with:
+        name: MangaTranslator-Windows
+        path: dist/MangaTranslator/
+
+  build-portable:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Create Portable ZIP (Source + Scripts)
+      run: |
+        # Tạo thư mục portable
+        mkdir -p portable
+        
+        # Copy tất cả files cần thiết
+        cp -r templates static fonts model ocr translator portable/
+        cp app.py main.py requirements.txt README.md portable/
+        cp add_text.py detect_bubbles.py process_bubble.py font_analyzer.py portable/
+        
+        # Tạo script chạy cho Windows
+        cat > portable/START.bat << 'EOF'
+        @echo off
+        echo ===============================================
+        echo    Manga Translator - Setup & Run
+        echo ===============================================
+        echo.
+        
+        REM Check Python
+        python --version >nul 2>&1
+        if errorlevel 1 (
+            echo [ERROR] Python khong duoc cai dat!
+            echo Vui long tai Python 3.10+ tu: https://www.python.org/downloads/
+            pause
+            exit /b 1
+        )
+        
+        echo [1/2] Dang cai dat dependencies...
+        pip install -r requirements.txt
+        
+        echo.
+        echo [2/2] Dang khoi dong ung dung...
+        echo.
+        echo ===============================================
+        echo    Truy cap: http://localhost:7860
+        echo    Nhan Ctrl+C de dung
+        echo ===============================================
+        echo.
+        
+        python app.py
+        pause
+        EOF
+        
+        # Tạo script cho Linux/Mac
+        cat > portable/start.sh << 'EOF'
+        #!/bin/bash
+        echo "==============================================="
+        echo "   Manga Translator - Setup & Run"
+        echo "==============================================="
+        echo ""
+        
+        # Check Python
+        if ! command -v python3 &> /dev/null; then
+            echo "[ERROR] Python3 không được cài đặt!"
+            exit 1
+        fi
+        
+        echo "[1/2] Đang cài đặt dependencies..."
+        pip3 install -r requirements.txt
+        
+        echo ""
+        echo "[2/2] Đang khởi động ứng dụng..."
+        echo ""
+        echo "==============================================="
+        echo "   Truy cập: http://localhost:7860"
+        echo "   Nhấn Ctrl+C để dừng"
+        echo "==============================================="
+        echo ""
+        
+        python3 app.py
+        EOF
+        chmod +x portable/start.sh
+        
+        # Đóng gói ZIP
+        cd portable && zip -r ../MangaTranslator-Portable-${{ github.ref_name }}.zip .
+        
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v1
+      if: startsWith(github.ref, 'refs/tags/')
+      with:
+        files: MangaTranslator-Portable-${{ github.ref_name }}.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
