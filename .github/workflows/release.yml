@@ -4,6 +4,12 @@ on:
   release:
     types: [created]
   workflow_dispatch:  # Cho phép chạy thủ công
+  push:
+    tags:
+      - 'v*'  # Trigger khi push tag bắt đầu bằng 'v'
+
+permissions:
+  contents: write  # Cần thiết để upload assets lên Release
 
 jobs:
   build-windows:
