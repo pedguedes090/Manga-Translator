@@ -14,6 +14,7 @@ import numpy as np
 import base64
 import cv2
 import os
+import sys
 
 
 app = Flask(__name__)
@@ -21,7 +22,28 @@ app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret_key")
 # No upload size limit (removed MAX_CONTENT_LENGTH restriction)
 
 # Initialize SocketIO for real-time progress updates
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# Auto-detect async_mode for PyInstaller compatibility
+def get_async_mode():
+    """Detect the best async mode for SocketIO."""
+    # When running as PyInstaller exe, use threading mode
+    if getattr(sys, 'frozen', False):
+        return 'threading'
+    # Try eventlet first
+    try:
+        import eventlet
+        return 'eventlet'
+    except ImportError:
+        pass
+    # Try gevent
+    try:
+        import gevent
+        return 'gevent'
+    except ImportError:
+        pass
+    # Fallback to threading
+    return 'threading'
+
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode=get_async_mode())
 
 MODEL_PATH = "model/model.pt"
 

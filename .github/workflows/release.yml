@@ -37,7 +37,7 @@ jobs:
         
     - name: Build with PyInstaller
       run: |
-        pyinstaller --noconfirm --onedir --windowed --name "MangaTranslator" ^
+        pyinstaller --noconfirm --onedir --console --name "MangaTranslator" ^
           --add-data "templates;templates" ^
           --add-data "static;static" ^
           --add-data "fonts;fonts" ^
@@ -46,12 +46,17 @@ jobs:
           --add-data "translator;translator" ^
           --hidden-import flask ^
           --hidden-import flask_socketio ^
+          --hidden-import engineio.async_drivers.threading ^
+          --hidden-import socketio ^
+          --hidden-import engineio ^
           --hidden-import ultralytics ^
           --hidden-import cv2 ^
           --hidden-import PIL ^
           --hidden-import torch ^
           --hidden-import numpy ^
+          --hidden-import werkzeug ^
           --collect-all ultralytics ^
+          --collect-all flask_socketio ^
           app.py
       shell: cmd
         
