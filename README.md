@@ -29,7 +29,7 @@ Dịch tự động speech bubbles trong manga/manhwa/manhua với AI!
 
 ```bash
 # Clone
-git clone https://github.com/YourUsername/Manga-Translator.git
+git clone https://github.com/pedguedes090/Manga-Translator.git
 cd Manga-Translator
 
 # Install
