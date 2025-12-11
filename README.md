@@ -19,7 +19,7 @@ Dịch tự động speech bubbles trong manga/manhwa/manhua với AI!
 | Feature | Description |
 |---------|-------------|
 | 🔍 **YOLO Detection** | Phát hiện speech bubble tự động (kể cả bubble đen) |
-| 📝 **OCR** | Manga-OCR, Chrome Lens với batch processing |
+| 📝 **OCR** | Manga-OCR, Chrome Lens |
 | 🌐 **Translators** | Gemini, Local LLM (Ollama/LM Studio), NLLB |
 | 🧠 **Context Memory** | Dịch chính xác hơn với context từ nhiều trang |
 | 🎨 **24+ Fonts** | Auto font matching với Gemini Vision |
@@ -44,7 +44,7 @@ Mở http://localhost:5000
 ## � Translators
 
 ### Gemini (Recommended)
-- Lấy API key từ [ai.google.dev](https://ai.google.dev)
+- Lấy API key từ [aistudio.google.com](https://aistudio.google.com/)
 - Free tier: 15 RPM, 1M tokens/day
 
 ### Local LLM (Ollama / LM Studio)
