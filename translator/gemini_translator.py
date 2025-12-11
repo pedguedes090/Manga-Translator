@@ -9,42 +9,18 @@ import os
 import time
 from typing import List, Dict, Optional
 
+from .base import BaseTranslator
+
 # Constants for retry logic
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 0.5  # Faster recovery: 0.5s → 1s → 2s
 
 
-class GeminiTranslator:
+class GeminiTranslator(BaseTranslator):
     """
     Translator using Google Gemini 2.5 Flash-Lite.
     Supports batch translation to minimize API calls.
     """
-    
-    LANG_NAMES = {
-        "ja": "Japanese",
-        "zh": "Chinese",
-        "ko": "Korean",
-        "en": "English",
-        "vi": "Vietnamese",
-        "th": "Thai",
-        "id": "Indonesian",
-        "fr": "French",
-        "de": "German",
-        "es": "Spanish",
-        "ru": "Russian"
-    }
-    
-    # Preset style templates
-    STYLE_PRESETS = {
-        "default": "",
-        "formal": "Use formal, polite language. Use respectful pronouns and expressions.",
-        "casual": "Use casual, natural everyday language. Like friends talking to each other.",
-        "keep_honorifics": "Keep Japanese honorifics like -san, -kun, -chan, -sama, senpai, sensei untranslated.",
-        "localize": "Fully localize cultural references. Adapt idioms and expressions to feel native.",
-        "literal": "Translate meaning accurately but ensure it still sounds natural when spoken.",
-        "web_novel": "Use dramatic web novel style with impactful expressions and emotional weight.",
-        "action": "Use short, punchy sentences. Quick pace. Impactful dialogue.",
-    }
     
     def __init__(self, api_key: str = None, custom_prompt: str = None, style: str = "default"):
         """
@@ -55,6 +31,8 @@ class GeminiTranslator:
             custom_prompt: Custom instructions for translation style.
             style: Preset style name from STYLE_PRESETS.
         """
+        super().__init__(custom_prompt=custom_prompt, style=style)
+        
         self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
         if not self.api_key:
             raise ValueError("Gemini API key required. Set GEMINI_API_KEY or pass api_key.")
@@ -62,18 +40,6 @@ class GeminiTranslator:
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
         
-        # Set custom prompt (user prompt takes priority over preset)
-        self.custom_prompt = custom_prompt or self.STYLE_PRESETS.get(style, "")
-    
-    def set_custom_prompt(self, prompt: str):
-        """Update custom prompt for translation style."""
-        self.custom_prompt = prompt
-    
-    def _build_style_instructions(self) -> str:
-        """Build style instructions for the prompt."""
-        if self.custom_prompt:
-            return f"\n\nStyle instructions: {self.custom_prompt}"
-        return ""
         
     def translate_single(
         self, 
@@ -328,47 +294,3 @@ Keep page names and bubble order exactly the same. No explanations or markdown."
             for page_name, texts in pages_texts.items():
                 result[page_name] = self.translate_batch(texts, source, target)
             return result
-
-
-# Convenience function for batch size of 10 pages
-def translate_manga_batch(
-    pages_texts: Dict[str, List[str]],
-    api_key: str,
-    source_lang: str = "ja",
-    target_lang: str = "en",
-    custom_prompt: str = None,
-    batch_size: int = 10
-) -> Dict[str, List[str]]:
-    """
-    Translate manga pages in batches of 10.
-    
-    Args:
-        pages_texts: All pages' texts
-        api_key: Gemini API key
-        source_lang: Source language code (ja, zh, ko, etc.)
-        target_lang: Target language code
-        custom_prompt: Custom style instructions
-        batch_size: Number of pages per API call (default: 10)
-        
-    Returns:
-        All translated texts
-    """
-    translator = GeminiTranslator(api_key, custom_prompt=custom_prompt)
-    
-    page_names = list(pages_texts.keys())
-    all_results = {}
-    
-    # Process in batches
-    for i in range(0, len(page_names), batch_size):
-        batch_pages = page_names[i:i + batch_size]
-        batch_texts = {name: pages_texts[name] for name in batch_pages}
-        
-        print(f"Translating pages {i+1} to {min(i+batch_size, len(page_names))}...")
-        batch_results = translator.translate_pages_batch(
-            batch_texts, 
-            source=source_lang, 
-            target=target_lang
-        )
-        all_results.update(batch_results)
-    
-    return all_results

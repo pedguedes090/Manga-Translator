@@ -3,6 +3,13 @@ from flask_socketio import SocketIO, emit
 import io
 import zipfile
 import json
+import warnings
+import os
+import sys
+
+# Suppress deprecation warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 from detect_bubbles import detect_bubbles
 from process_bubble import process_bubble, process_bubble_auto, is_dark_bubble
 from translator.translator import MangaTranslator
@@ -13,39 +20,39 @@ from PIL import Image
 import numpy as np
 import base64
 import cv2
-import os
-import sys
 
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret_key")
-# No upload size limit (removed MAX_CONTENT_LENGTH restriction)
 
-# Initialize SocketIO for real-time progress updates
-# Auto-detect async_mode for PyInstaller compatibility
+# Initialize SocketIO with auto-detected async mode
 def get_async_mode():
-    """Detect the best async mode for SocketIO."""
-    # When running as PyInstaller exe, use threading mode
     if getattr(sys, 'frozen', False):
         return 'threading'
-    # Try eventlet first
     try:
         import eventlet
         return 'eventlet'
     except ImportError:
         pass
-    # Try gevent
     try:
         import gevent
         return 'gevent'
     except ImportError:
         pass
-    # Fallback to threading
     return 'threading'
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=get_async_mode())
 
+# Control verbose logging (set VERBOSE_LOG=1 to enable debug output)
+VERBOSE_LOG = os.environ.get("VERBOSE_LOG", "0") == "1"
+
+def log(msg):
+    """Print only if verbose logging is enabled."""
+    if VERBOSE_LOG:
+        print(msg)
+
 MODEL_PATH = "model/model.pt"
+
 
 
 @app.route("/")
@@ -123,21 +130,21 @@ def process_single_image(image, manga_translator, mocr, selected_translator, sel
             translated_texts = [manga_translator.translate(t, method=selected_translator) for t in texts_to_translate]
     
     elif selected_translator == "copilot" and len(texts_to_translate) > 1:
-        # Use batch translation for Copilot
+        # Use batch translation for Local LLM (Ollama, LM Studio, etc.)
         try:
-            if not hasattr(manga_translator, '_copilot_translator') or manga_translator._copilot_translator is None:
-                from translator.copilot_translator import CopilotTranslator
+            if not hasattr(manga_translator, '_local_llm_translator') or manga_translator._local_llm_translator is None:
+                from translator.local_llm_translator import LocalLLMTranslator
                 copilot_server = getattr(manga_translator, '_copilot_server', 'http://localhost:8080')
                 copilot_model = getattr(manga_translator, '_copilot_model', 'gpt-4o')
                 copilot_custom_prompt = getattr(manga_translator, '_copilot_custom_prompt', None)
-                manga_translator._copilot_translator = CopilotTranslator(
+                manga_translator._local_llm_translator = LocalLLMTranslator(
                     server_url=copilot_server,
                     model=copilot_model,
                     custom_prompt=copilot_custom_prompt
                 )
-                print(f"Copilot translator initialized: {copilot_server} / {copilot_model}")
+                print(f"Local LLM translator initialized: {copilot_server} / {copilot_model}")
             
-            translated_texts = manga_translator._copilot_translator.translate_batch(
+            translated_texts = manga_translator._local_llm_translator.translate_batch(
                 texts_to_translate,
                 source=manga_translator.source,
                 target=manga_translator.target
@@ -207,10 +214,7 @@ def process_images_with_batch(images_data, manga_translator, mocr, selected_font
             pass  # Silently fail if socket not connected
     
     total_images = len(images_data)
-    print(f"\n{'='*50}")
-    print(f"Processing {total_images} images...")
-    print(f"Context Memory: {'ON' if use_context_memory else 'OFF'}")
-    print(f"{'='*50}")
+    log(f"Processing {total_images} images... Context Memory: {'ON' if use_context_memory else 'OFF'}")
     
     start_time = time.time()
     
@@ -304,9 +308,9 @@ def process_images_with_batch(images_data, manga_translator, mocr, selected_font
     
     if pages_texts:
         # Get the translator based on type
-        if translator_type == "copilot" and hasattr(manga_translator, '_copilot_translator') and manga_translator._copilot_translator:
-            translator = manga_translator._copilot_translator
-            translator_name = "Copilot"
+        if translator_type == "copilot" and hasattr(manga_translator, '_local_llm_translator') and manga_translator._local_llm_translator:
+            translator = manga_translator._local_llm_translator
+            translator_name = "Local LLM"
         elif translator_type == "gemini" and hasattr(manga_translator, '_gemini_translator') and manga_translator._gemini_translator:
             translator = manga_translator._gemini_translator
             translator_name = "Gemini"
@@ -406,16 +410,16 @@ def upload_file():
         "Opus-mt model": "hf",
         "NLLB": "nllb",
         "Gemini": "gemini",
-        "Copilot": "copilot"
+        "Local LLM": "copilot"  # copilot is internal name for OpenAI-compatible endpoints
     }
     selected_translator = translator_map.get(
         request.form["selected_translator"],
         request.form["selected_translator"].lower()
     )
     
-    # Get Copilot settings if Copilot is selected
+    # Get Local LLM settings if selected (Ollama, LM Studio, etc.)
     copilot_server = request.form.get("copilot_server", "http://localhost:8080")
-    copilot_model = request.form.get("selected_copilot_model", "gpt-4o")
+    copilot_model = request.form.get("copilot_model_input", "gpt-4o")
     
     # Get Gemini API key from form
     gemini_api_key = request.form.get("gemini_api_key", "").strip()
@@ -500,7 +504,7 @@ def upload_file():
     if selected_translator == "gemini" and style:
         manga_translator._gemini_custom_prompt = style
     
-    # Set custom prompt for Copilot
+    # Set custom prompt for Local LLM
     if selected_translator == "copilot" and style:
         manga_translator._copilot_custom_prompt = style
     
@@ -513,7 +517,7 @@ def upload_file():
     if selected_translator == "copilot":
         manga_translator._copilot_server = copilot_server
         manga_translator._copilot_model = copilot_model
-        print(f"Using Copilot API: {copilot_server} / model: {copilot_model}")
+        print(f"Using Local LLM: {copilot_server} / model: {copilot_model}")
     
     if selected_ocr == "chrome-lens":
         mocr = ChromeLensOCR()
@@ -539,7 +543,7 @@ def upload_file():
     processed_images = []
     auto_font_determined = False  # Flag to analyze font only once
     
-    # For Copilot and Gemini: Use multi-page batch processing
+    # For Local LLM and Gemini: Use multi-page batch processing
     if selected_translator in ["copilot", "gemini"]:
         # First, read all images into memory
         all_images = []
@@ -578,16 +582,16 @@ def upload_file():
         
         # Initialize translator based on type
         if selected_translator == "copilot":
-            if not hasattr(manga_translator, '_copilot_translator') or manga_translator._copilot_translator is None:
-                from translator.copilot_translator import CopilotTranslator
-                # Get custom prompt for Copilot
+            if not hasattr(manga_translator, '_local_llm_translator') or manga_translator._local_llm_translator is None:
+                from translator.local_llm_translator import LocalLLMTranslator
+                # Get custom prompt for Local LLM
                 copilot_custom_prompt = style if style else None
-                manga_translator._copilot_translator = CopilotTranslator(
+                manga_translator._local_llm_translator = LocalLLMTranslator(
                     server_url=copilot_server,
                     model=copilot_model,
                     custom_prompt=copilot_custom_prompt
                 )
-                print(f"Copilot translator initialized: {copilot_server} / {copilot_model} (style: {style or 'default'})")
+                print(f"Local LLM translator initialized: {copilot_server} / {copilot_model} (style: {style or 'default'})")
         
         elif selected_translator == "gemini":
             if not hasattr(manga_translator, '_gemini_translator') or manga_translator._gemini_translator is None:

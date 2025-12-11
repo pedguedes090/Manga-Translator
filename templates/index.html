@@ -70,7 +70,7 @@
                   </div>
                   <div class="options">
                      <span class="option">Gemini</span>
-                     <span class="option">Copilot</span>
+                     <span class="option">Local LLM</span>
                      <span class="option">Google</span>
                      <span class="option">NLLB</span>
                      <span class="option">Baidu</span>
@@ -177,53 +177,28 @@
                placeholder="Ví dụ: Dịch theo phong cách light novel, giữ nguyên tên nhân vật..." rows="2"></textarea>
          </div>
 
-         <!-- Copilot Settings (show when Copilot selected) -->
+         <!-- Local LLM Settings (show when Local LLM selected) -->
          <div id="copilot-settings" style="display: none; width: 100%;">
             <div class="form-grid">
                <div class="select-wrapper">
-                  <label class="translator-label">Copilot Server URL</label>
+                  <label class="translator-label">Server URL</label>
                   <input type="text" id="copilot_server" name="copilot_server" value="http://localhost:8080"
-                     placeholder="http://localhost:8080"
-                     style="width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px;">
+                     placeholder="http://localhost:11434 (Ollama)" class="text-input">
+                  <small style="color: #888; font-size: 11px; margin-top: 4px; display: block;">
+                     Ollama: 11434 | LM Studio: 1234 | LocalAI: 8080
+                  </small>
                </div>
                <div class="select-wrapper">
-                  <label class="translator-label">Model</label>
-                  <div class="custom-select" id="copilot_model" tabindex="0">
-                     <div class="select-box">
-                        <span class="selected"></span>
-                        <span class="icon">&#9660;</span>
-                     </div>
-                     <div class="options">
-                        <!-- ⭐ FREE Unlimited Models -->
-                        <span class="option">gpt-4.1</span>
-                        <span class="option">gpt-4o</span>
-                        <span class="option">gpt-5-mini</span>
-                        <span class="option">grok-code-fast-1</span>
-                        <span class="option">oswe-vscode-prime</span>
-                        <!-- Other Models -->
-                        <span class="option">gpt-5</span>
-                        <span class="option">gpt-5.1</span>
-                        <span class="option">gpt-5.1-codex</span>
-                        <span class="option">gpt-5.1-codex-mini</span>
-                        <span class="option">gpt-5.1-codex-max</span>
-                        <span class="option">gpt-5-codex</span>
-                        <span class="option">gpt-41-copilot</span>
-                        <span class="option">gpt-4o-mini</span>
-                        <span class="option">gpt-4o-2024-11-20</span>
-                        <span class="option">gpt-4</span>
-                        <span class="option">gpt-4-0125-preview</span>
-                        <span class="option">gpt-3.5-turbo</span>
-                        <span class="option">claude-sonnet-4.5</span>
-                        <span class="option">claude-sonnet-4</span>
-                        <span class="option">claude-opus-4.5</span>
-                        <span class="option">claude-haiku-4.5</span>
-                        <span class="option">gemini-3-pro-preview</span>
-                        <span class="option">gemini-2.5-pro</span>
-                     </div>
-                  </div>
+                  <label class="translator-label">Model Name</label>
+                  <input type="text" id="copilot_model_input" name="copilot_model_input" value="gpt-4.1"
+                     placeholder="llama3.2, qwen2.5, mistral..." class="text-input">
+                  <small style="color: #888; font-size: 11px; margin-top: 4px; display: block;">
+                     Nhập tên model đang chạy trên server
+                  </small>
                </div>
             </div>
          </div>
+
 
          <!-- Gemini Settings (show when Gemini selected) -->
          <div id="gemini-settings" style="display: block; width: 100%;">
@@ -251,7 +226,6 @@
          <input type="hidden" id="selected_style" name="selected_style">
          <input type="hidden" id="selected_font" name="selected_font">
          <input type="hidden" id="selected_ocr" name="selected_ocr">
-         <input type="hidden" id="selected_copilot_model" name="selected_copilot_model">
          <button type="submit">Translate</button>
       </form>
 

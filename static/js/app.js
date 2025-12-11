@@ -44,7 +44,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     const copilotSettings = document.getElementById('copilot-settings');
                     const geminiSettings = document.getElementById('gemini-settings');
 
-                    if (option.textContent === 'Copilot') {
+                    if (option.textContent === 'Local LLM') {
                         copilotSettings.style.display = 'block';
                         geminiSettings.style.display = 'none';
                     } else if (option.textContent === 'Gemini') {
@@ -65,6 +65,48 @@ document.addEventListener("DOMContentLoaded", () => {
                 selectBox.classList.remove('open');
             }
         });
+
+        // Save dropdown selection to localStorage
+        optionList.forEach(option => {
+            option.addEventListener('click', () => {
+                if (selectBox.id) {
+                    localStorage.setItem('select_' + selectBox.id, option.textContent);
+                }
+            });
+        });
+
+        // Restore saved selection on load
+        if (selectBox.id) {
+            const savedValue = localStorage.getItem('select_' + selectBox.id);
+            if (savedValue) {
+                optionList.forEach(opt => {
+                    if (opt.textContent === savedValue) {
+                        selectedText.textContent = savedValue;
+                        optionList.forEach(o => o.classList.remove('selected'));
+                        opt.classList.add('selected');
+
+                        // Trigger visibility updates for special selects
+                        if (selectBox.id === 'style' && savedValue.includes('Custom')) {
+                            document.getElementById('custom-prompt-wrapper').style.display = 'block';
+                        }
+                        if (selectBox.id === 'translator') {
+                            const copilotSettings = document.getElementById('copilot-settings');
+                            const geminiSettings = document.getElementById('gemini-settings');
+                            if (savedValue === 'Local LLM') {
+                                copilotSettings.style.display = 'block';
+                                geminiSettings.style.display = 'none';
+                            } else if (savedValue === 'Gemini') {
+                                copilotSettings.style.display = 'none';
+                                geminiSettings.style.display = 'block';
+                            } else {
+                                copilotSettings.style.display = 'none';
+                                geminiSettings.style.display = 'none';
+                            }
+                        }
+                    }
+                });
+            }
+        }
     });
 
     // Load saved Gemini API key from localStorage
@@ -74,26 +116,71 @@ document.addEventListener("DOMContentLoaded", () => {
         if (savedKey) {
             geminiKeyInput.value = savedKey;
         }
-
-        // Save to localStorage on input change
         geminiKeyInput.addEventListener('input', () => {
             localStorage.setItem('gemini_api_key', geminiKeyInput.value);
         });
     }
 
-    // Load saved Copilot server URL from localStorage
+    // Load saved Local LLM server URL from localStorage
     const copilotServerInput = document.getElementById('copilot_server');
     if (copilotServerInput) {
         const savedServer = localStorage.getItem('copilot_server');
         if (savedServer) {
             copilotServerInput.value = savedServer;
         }
-
         copilotServerInput.addEventListener('input', () => {
             localStorage.setItem('copilot_server', copilotServerInput.value);
         });
     }
+
+    // Load saved Local LLM model from localStorage
+    const copilotModelInput = document.getElementById('copilot_model_input');
+    if (copilotModelInput) {
+        const savedModel = localStorage.getItem('copilot_model');
+        if (savedModel) {
+            copilotModelInput.value = savedModel;
+        }
+        copilotModelInput.addEventListener('input', () => {
+            localStorage.setItem('copilot_model', copilotModelInput.value);
+        });
+    }
+
+    // Load saved custom prompt from localStorage
+    const customPromptInput = document.getElementById('custom_prompt');
+    if (customPromptInput) {
+        const savedPrompt = localStorage.getItem('custom_prompt');
+        if (savedPrompt) {
+            customPromptInput.value = savedPrompt;
+        }
+        customPromptInput.addEventListener('input', () => {
+            localStorage.setItem('custom_prompt', customPromptInput.value);
+        });
+    }
+
+    // Load saved checkbox states from localStorage
+    const contextMemoryCheckbox = document.getElementById('context_memory');
+    if (contextMemoryCheckbox) {
+        const saved = localStorage.getItem('context_memory');
+        if (saved !== null) {
+            contextMemoryCheckbox.checked = saved === 'true';
+        }
+        contextMemoryCheckbox.addEventListener('change', () => {
+            localStorage.setItem('context_memory', contextMemoryCheckbox.checked);
+        });
+    }
+
+    const blackBubblesCheckbox = document.getElementById('detect_black_bubbles');
+    if (blackBubblesCheckbox) {
+        const saved = localStorage.getItem('detect_black_bubbles');
+        if (saved !== null) {
+            blackBubblesCheckbox.checked = saved === 'true';
+        }
+        blackBubblesCheckbox.addEventListener('change', () => {
+            localStorage.setItem('detect_black_bubbles', blackBubblesCheckbox.checked);
+        });
+    }
 });
+
 
 // Handles multiple file upload change event
 const fileUpload = document.getElementById('file-upload');
@@ -152,7 +239,6 @@ function updateHiddenInputs() {
     document.getElementById("selected_style").value = getSelectedText("style");
     document.getElementById("selected_font").value = getSelectedText("font");
     document.getElementById("selected_ocr").value = getSelectedText("ocr");
-    document.getElementById("selected_copilot_model").value = getSelectedText("copilot_model");
 
     // Validate Gemini API key if Gemini is selected
     const translator = getSelectedText("translator");

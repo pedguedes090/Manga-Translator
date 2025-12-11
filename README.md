@@ -7,32 +7,32 @@ sdk: docker
 pinned: false
 license: mit
 ---
+
 # Manga Translator 📚
 
-Dịch tự động speech bubbles trong manga/manhwa/manhua!
+Dịch tự động speech bubbles trong manga/manhwa/manhua với AI!
+
+🌐 **Demo:** [manga-translator.duongkum999.me](https://manga-translator.duongkum999.me)
 
 ## ✨ Features
 
-### Core
-- 🔍 **YOLO-based bubble detection** - Phát hiện speech bubble tự động
-- 📝 **Multiple OCR engines** - Manga-OCR, Chrome Lens (batch support)
-- 🌐 **Multiple translators** - Gemini, Copilot API, NLLB, Opus-MT
+| Feature | Description |
+|---------|-------------|
+| 🔍 **YOLO Detection** | Phát hiện speech bubble tự động (kể cả bubble đen) |
+| 📝 **OCR** | Manga-OCR, Chrome Lens với batch processing |
+| 🌐 **Translators** | Gemini, Local LLM (Ollama/LM Studio), NLLB |
+| 🧠 **Context Memory** | Dịch chính xác hơn với context từ nhiều trang |
+| 🎨 **24+ Fonts** | Auto font matching với Gemini Vision |
+| 📦 **Download ZIP** | Tải tất cả ảnh đã dịch |
 
-### Translation
-- 🧠 **Context Memory** - Sử dụng context từ tất cả ảnh để dịch chính xác hơn
-- 🎯 **Multi-page batch translation** - Dịch 10 pages/API call tiết kiệm quota
-- 🎨 **Translation styles** - Default, Casual, Formal, Keep Honorifics, Web Novel...
-
-### UI/UX
-- 📊 **Real-time progress** - Progress bar hiển thị tiến độ theo từng phase
-- 📦 **Download ZIP** - Tải tất cả ảnh đã dịch dưới dạng ZIP
-- 🔤 **Auto font sizing** - Tự động điều chỉnh cỡ chữ theo bubble
-- 📏 **24+ fonts** - Yuki fonts, AnimeAce, và nhiều font khác
-
-## 🚀 Usage
+## � Quick Start
 
 ```bash
-# Install dependencies
+# Clone
+git clone https://github.com/YourUsername/Manga-Translator.git
+cd Manga-Translator
+
+# Install
 pip install -r requirements.txt
 
 # Run
@@ -41,35 +41,46 @@ python app.py
 
 Mở http://localhost:5000
 
-## 📋 Workflow
+## � Translators
 
-1. Upload manga/manhwa images
-2. Chọn ngôn ngữ gốc (Japanese/Chinese/Korean/English)
-3. Chọn ngôn ngữ đích (Vietnamese, English, ...)
-4. Chọn translator (Gemini/Copilot) và OCR engine
-5. Check "Context Memory" để dịch chính xác hơn
-6. Click **Translate**!
-7. Xem progress bar real-time
-8. Download từng ảnh hoặc **Download ZIP**
+### Gemini (Recommended)
+- Lấy API key từ [ai.google.dev](https://ai.google.dev)
+- Free tier: 15 RPM, 1M tokens/day
 
-## 🌍 Supported Languages
+### Local LLM (Ollama / LM Studio)
+- Chạy Ollama: `ollama serve` (port 11434)
+- Hoặc LM Studio Server (port 1234)
+- Nhập tên model: `llama3.2`, `qwen2.5`, `mistral`...
 
-| Source | Target |
-|--------|--------|
-| Japanese (Manga) | Vietnamese |
-| Chinese (Manhua) | English |
-| Korean (Manhwa) | Chinese |
-| English (Comic) | Korean, Thai, Indonesian, French, German, Spanish, Russian |
+## �📋 Workflow
 
-## 📡 API Keys
+1. **Upload** manga/manhwa images
+2. **Chọn ngôn ngữ** (Japanese/Chinese/Korean → Vietnamese/English/...)
+3. **Chọn translator** (Gemini hoặc Local LLM)
+4. **Enable Context Memory** để dịch chính xác hơn
+5. **Click Translate** và xem progress real-time
+6. **Download** từng ảnh hoặc ZIP
 
-- **Gemini**: Nhập API key từ [ai.google.dev](https://ai.google.dev)
-- **Copilot**: Chạy server [copilot-api](https://github.com/copilot-api) local
+## 🌍 Languages
 
-## 🔧 Tech Stack
+**Source:** Japanese, Chinese, Korean, English  
+**Target:** Vietnamese, English, Chinese, Korean, Thai, Indonesian, French, German, Spanish, Russian
 
-- Flask + Flask-SocketIO (real-time WebSocket)
-- YOLOv8 (bubble detection)
-- Manga-OCR / Chrome-Lens (OCR)
-- Gemini / Copilot API (translation)
-- PIL (text rendering)
+##  Tech Stack
+
+- **Backend:** Flask + Flask-SocketIO
+- **Detection:** YOLOv8 + OpenCV (black bubbles)
+- **OCR:** Manga-OCR, Chrome Lens API
+- **Translation:** Gemini API, OpenAI-compatible endpoints
+- **Rendering:** PIL with smart text wrapping
+
+## 📦 Docker
+
+```bash
+docker build -t manga-translator .
+docker run -p 5000:5000 manga-translator
+```
+
+## 📄 License
+
+MIT

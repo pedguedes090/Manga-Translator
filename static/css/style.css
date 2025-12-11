@@ -1,6 +1,10 @@
 body {
 	font-family: 'Exo 2', sans-serif;
-	background-image: url("../img/back.jpg"); background-size: cover; background-position: center; background-attachment: fixed; background-repeat: no-repeat;
+	background-image: url("../img/back.jpg");
+	background-size: cover;
+	background-position: center;
+	background-attachment: fixed;
+	background-repeat: no-repeat;
 	margin: 0;
 	min-height: 100vh;
 	display: flex;
@@ -21,10 +25,11 @@ header {
 	background-color: #fff;
 	border-radius: 16px;
 	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-	padding: 30px 40px;
-	width: 520px;
-	max-width: 90%;
+	padding: 35px 45px;
+	width: 600px;
+	max-width: 95%;
 	box-sizing: border-box;
+	margin: 20px 0;
 }
 
 .container>img {
@@ -42,8 +47,8 @@ form {
 .form-grid {
 	display: grid;
 	grid-template-columns: 1fr 1fr;
-	gap: 15px 20px;
-	margin-bottom: 20px;
+	gap: 18px 24px;
+	margin-bottom: 24px;
 }
 
 .select-wrapper {
@@ -59,7 +64,7 @@ label.translator-label {
 	font-size: 13px;
 	font-weight: 600;
 	color: #333;
-	margin-bottom: 6px;
+	margin-bottom: 8px;
 }
 
 .custom-select {
@@ -70,7 +75,7 @@ label.translator-label {
 .select-box {
 	border: 1px solid #ddd;
 	border-radius: 8px;
-	padding: 10px 14px;
+	padding: 12px 14px;
 	cursor: pointer;
 	user-select: none;
 	background-color: #fafafa;
@@ -78,6 +83,7 @@ label.translator-label {
 	justify-content: space-between;
 	align-items: center;
 	transition: border-color 0.2s, box-shadow 0.2s;
+	min-height: 20px;
 }
 
 .select-box:hover {
@@ -151,6 +157,28 @@ label.translator-label {
 	border-color: #5E1675;
 }
 
+/* Text input fields */
+.text-input {
+	width: 100%;
+	padding: 12px 14px;
+	border: 1px solid #ddd;
+	border-radius: 8px;
+	font-size: 14px;
+	font-family: inherit;
+	box-sizing: border-box;
+	transition: border-color 0.2s;
+}
+
+.text-input:focus {
+	outline: none;
+	border-color: #5E1675;
+}
+
+.text-input::placeholder {
+	color: #aaa;
+}
+
+
 /* File upload */
 input[type="file"] {
 	display: none;
@@ -159,7 +187,7 @@ input[type="file"] {
 .file {
 	display: block;
 	width: 100%;
-	padding: 14px;
+	padding: 16px;
 	border: 2px dashed #5E1675;
 	border-radius: 10px;
 	text-align: center;
@@ -167,7 +195,8 @@ input[type="file"] {
 	color: #5E1675;
 	font-weight: 500;
 	transition: background-color 0.2s, border-color 0.2s;
-	margin-bottom: 10px;
+	margin-top: 10px;
+	margin-bottom: 15px;
 }
 
 .file:hover {
@@ -196,7 +225,7 @@ input[type="file"] {
 /* Submit button */
 button {
 	width: 100%;
-	padding: 14px;
+	padding: 16px;
 	background-color: #5E1675;
 	color: white;
 	border: none;
@@ -205,6 +234,7 @@ button {
 	font-size: 16px;
 	font-weight: 600;
 	transition: background-color 0.2s, transform 0.1s;
+	margin-top: 5px;
 }
 
 button:hover {
@@ -370,11 +400,11 @@ button:active {
 	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
-.toggle-container input:checked + .toggle-slider {
+.toggle-container input:checked+.toggle-slider {
 	background-color: #5E1675;
 }
 
-.toggle-container input:checked + .toggle-slider::before {
+.toggle-container input:checked+.toggle-slider::before {
 	transform: translateX(24px);
 }
 
@@ -393,4 +423,3 @@ button:active {
 		padding: 20px;
 	}
 }
-
