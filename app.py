@@ -13,6 +13,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 from detect_bubbles import detect_bubbles
 from process_bubble import process_bubble, process_bubble_auto, is_dark_bubble
 from translator.translator import MangaTranslator
+from translator.context_memory import ContextMemory
 from add_text import add_text
 from manga_ocr import MangaOcr
 from ocr.chrome_lens_ocr import ChromeLensOCR
@@ -53,6 +54,48 @@ def log(msg):
 
 MODEL_PATH = "model/model.pt"
 
+# Default max height for split (1.5x width = landscape-ish ratio)
+DEFAULT_SPLIT_HEIGHT_RATIO = 2.0
+
+
+def split_long_image(image: np.ndarray, max_height_ratio: float = DEFAULT_SPLIT_HEIGHT_RATIO) -> list:
+    """
+    Split a long image into multiple shorter chunks.
+    
+    Args:
+        image: Input image as numpy array (H, W, C)
+        max_height_ratio: Maximum height/width ratio before splitting.
+                          Images taller than width * ratio will be split.
+                          
+    Returns:
+        List of image chunks (numpy arrays). If image doesn't need splitting,
+        returns a list with just the original image.
+    """
+    height, width = image.shape[:2]
+    max_height = int(width * max_height_ratio)
+    
+    # If image is not too tall, return as-is
+    if height <= max_height:
+        return [image]
+    
+    # Split into chunks
+    chunks = []
+    current_y = 0
+    chunk_num = 0
+    
+    while current_y < height:
+        # Calculate chunk end position
+        chunk_end = min(current_y + max_height, height)
+        
+        # Extract chunk
+        chunk = image[current_y:chunk_end, :].copy()
+        chunks.append(chunk)
+        
+        current_y = chunk_end
+        chunk_num += 1
+    
+    print(f"  Split image ({width}x{height}) into {len(chunks)} chunks")
+    return chunks
 
 
 @app.route("/")
@@ -321,11 +364,11 @@ def process_images_with_batch(images_data, manga_translator, mocr, selected_font
         if translator:
             print(f"{translator_name} batch translating {len(pages_texts)} pages in chunks of {batch_size}...")
             
-            # Build full context from ALL pages if context memory is enabled
-            all_context = None
+            # Initialize context memory if enabled
+            context_memory = None
             if use_context_memory:
-                all_context = pages_texts  # Pass all texts for context
-                print(f"  Using context from all {len(pages_texts)} pages")
+                context_memory = ContextMemory()
+                print(f"  Context Memory enabled - tracking terms and story context")
             
             # Process in batches
             page_names = list(pages_texts.keys())
@@ -341,9 +384,16 @@ def process_images_with_batch(images_data, manga_translator, mocr, selected_font
                         batch_texts,
                         source=manga_translator.source,
                         target=manga_translator.target,
-                        context=all_context if use_context_memory else None
+                        context_memory=context_memory
                     )
                     all_translations.update(translated)
+                    
+                    # Update context memory with this batch's translations
+                    if context_memory:
+                        context_memory.update_from_translation(batch_texts, translated)
+                        stats = context_memory.get_stats()
+                        print(f"    Context updated: {stats['tracked_words']} terms tracked, {stats['recent_pages']} pages in memory")
+                        
                 except Exception as e:
                     print(f"  Batch failed: {e}, falling back to individual translation")
                     for name, texts in batch_texts.items():
@@ -429,6 +479,9 @@ def upload_file():
 
     # Get black bubble detection setting (checkbox - "on" if checked, None if not)
     enable_black_bubble = request.form.get("detect_black_bubbles") == "on"
+
+    # Get split long images setting (checkbox - "on" if checked, None if not)
+    split_long_images = request.form.get("split_long_images") == "on"
 
     # Get font selection
     selected_font_raw = request.form["selected_font"]
@@ -614,15 +667,33 @@ def upload_file():
             enable_black_bubble=enable_black_bubble
         )
         
-        # Encode results to base64
+        # Encode results to base64 (with optional splitting)
         for result in processed_results:
             try:
-                _, buffer = cv2.imencode(".jpg", result['image'], [cv2.IMWRITE_JPEG_QUALITY, 95])
-                encoded_image = base64.b64encode(buffer.tobytes()).decode("utf-8")
-                processed_images.append({
-                    "name": result['name'],
-                    "data": encoded_image
-                })
+                image = result['image']
+                base_name = result['name']
+                
+                # Split long images if enabled
+                if split_long_images:
+                    chunks = split_long_image(image)
+                else:
+                    chunks = [image]
+                
+                # Encode each chunk
+                for i, chunk in enumerate(chunks):
+                    _, buffer = cv2.imencode(".jpg", chunk, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    encoded_image = base64.b64encode(buffer.tobytes()).decode("utf-8")
+                    
+                    # Add suffix if split into multiple chunks
+                    if len(chunks) > 1:
+                        chunk_name = f"{base_name}_part{i+1}"
+                    else:
+                        chunk_name = base_name
+                    
+                    processed_images.append({
+                        "name": chunk_name,
+                        "data": encoded_image
+                    })
             except Exception as e:
                 print(f"Error encoding {result['name']}: {e}")
     
@@ -665,14 +736,27 @@ def upload_file():
                         enable_black_bubble=enable_black_bubble
                     )
                     
-                    # Encode to base64
-                    _, buffer = cv2.imencode(".jpg", processed_image, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                    encoded_image = base64.b64encode(buffer.tobytes()).decode("utf-8")
+                    # Split long images if enabled
+                    if split_long_images:
+                        chunks = split_long_image(processed_image)
+                    else:
+                        chunks = [processed_image]
                     
-                    processed_images.append({
-                        "name": name,
-                        "data": encoded_image
-                    })
+                    # Encode each chunk to base64
+                    for i, chunk in enumerate(chunks):
+                        _, buffer = cv2.imencode(".jpg", chunk, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                        encoded_image = base64.b64encode(buffer.tobytes()).decode("utf-8")
+                        
+                        # Add suffix if split into multiple chunks
+                        if len(chunks) > 1:
+                            chunk_name = f"{name}_part{i+1}"
+                        else:
+                            chunk_name = name
+                        
+                        processed_images.append({
+                            "name": chunk_name,
+                            "data": encoded_image
+                        })
                     
                 except Exception as e:
                     print(f"Error processing {file.filename}: {e}")

@@ -4,9 +4,12 @@ Uses OpenAI-compatible API endpoints (Ollama, LM Studio, LocalAI, vLLM, Copilot-
 """
 import requests
 import json
-from typing import List
+from typing import List, TYPE_CHECKING
 
 from .base import BaseTranslator
+
+if TYPE_CHECKING:
+    from .context_memory import ContextMemory
 
 
 class LocalLLMTranslator(BaseTranslator):
@@ -132,19 +135,24 @@ Text: {text}"""
         
         style_text = self._build_style_instructions()
         
-        prompt = f"""You are an expert manga/comic translator. Translate the following {source_name} texts to {target_name}.
+        prompt = f"""Dịch manga/comic từ {source_name} sang {target_name}.
 
-Rules:
-- These are speech bubble texts from the SAME comic page - maintain consistency
-- Translate for SPOKEN dialogue, natural when read aloud
-- Preserve tone, emotion, and personality
-- For Vietnamese: use appropriate pronouns based on context
-- Keep short lines impactful{style_text}
+QUY TẮC:
+1. HỘI THOẠI NÓI - phải nghe tự nhiên như người thật nói
+2. KHÔNG dịch word-by-word, diễn đạt lại theo cách người Việt nói
+3. Giữ cảm xúc, tính cách nhân vật
 
-Input (JSON array of texts):
+TIẾNG VIỆT:
+- TÊN: giữ nguyên (Tanaka, Kim, Lý...), không dịch nghĩa. Kính ngữ: sunbae→tiền bối, sensei→thầy
+- Đại từ: tao/mày, tôi/cậu, anh/em... phù hợp quan hệ
+- Thán từ tự nhiên: くそ→Đ*t/Chết tiệt, やばい→Toang, すごい→Đỉnh
+- Khẩu ngữ: oke, ngon, tởm, đỉnh, chill...
+- TRÁNH dịch kiểu sách giáo khoa{style_text}
+
+Input:
 {json.dumps(texts_to_translate, ensure_ascii=False)}
 
-Return ONLY a JSON array with translated texts in the EXACT same order.
+Trả về JSON array với bản dịch theo ĐÚNG THỨ TỰ.
 Example: ["translation 1", "translation 2"]"""
 
         try:
@@ -197,7 +205,7 @@ Example: ["translation 1", "translation 2"]"""
         pages_texts: dict, 
         source: str = "ja", 
         target: str = "en",
-        context: dict = None
+        context_memory: 'ContextMemory' = None
     ) -> dict:
         """
         Translate texts from multiple pages in a single API call.
@@ -208,7 +216,7 @@ Example: ["translation 1", "translation 2"]"""
                          e.g., {"page1": ["text1", "text2"], "page2": ["text3"]}
             source: Source language code
             target: Target language code
-            context: Optional dict of ALL page texts for context (helps maintain consistency)
+            context_memory: Optional ContextMemory object for consistent translation
             
         Returns:
             Dict with same structure but translated texts
@@ -219,39 +227,34 @@ Example: ["translation 1", "translation 2"]"""
         source_name = self.LANG_NAMES.get(source, "Japanese")
         target_name = self.LANG_NAMES.get(target, "English")
         
-        # Build context section if context is provided
+        # Build context section from ContextMemory if provided
         context_section = ""
-        if context and context != pages_texts:
-            # Show summary of other pages for context
-            other_pages = {k: v for k, v in context.items() if k not in pages_texts}
-            if other_pages:
-                context_preview = []
-                for page, texts in list(other_pages.items())[:5]:  # First 5 pages for context
-                    context_preview.append(f"{page}: {' | '.join(texts[:3])}...")
-                context_section = f"""
-STORY CONTEXT (from other pages in this batch - use for character/tone consistency):
-{chr(10).join(context_preview)}
----
-"""
+        if context_memory:
+            context_section = context_memory.generate_context_prompt()
         
         style_text = self._build_style_instructions()
         
-        prompt = f"""You are an expert manga/comic translator. Translate the following {source_name} texts to {target_name}.
+        prompt = f"""Dịch manga/comic từ {source_name} sang {target_name}.
 {context_section}
-Context: These are SEQUENTIAL comic pages telling a continuous story. Maintain narrative flow and character voice consistency across all pages.
+Đây là các trang LIÊN TIẾP trong cùng 1 story.
 
-Rules:
-- Translate for SPOKEN dialogue - it must sound natural when read aloud
-- Each character should have a consistent voice/speaking style across pages
-- Preserve tone, emotion, and personality through careful word choice
-- For Vietnamese: Choose appropriate pronouns based on character relationships
-- Keep short lines impactful. Don't pad or over-explain.{style_text}
+QUY TẮC DỊCH:
+1. HỘI THOẠI NÓI - phải nghe tự nhiên như người thật nói
+2. KHÔNG dịch word-by-word, diễn đạt lại theo cách người Việt nói
+3. Mỗi nhân vật giữ giọng điệu nhất quán
 
-Input (JSON - sequential pages with their speech bubbles):
+HƯỚNG DẪN TIẾNG VIỆT:
+- TÊN: giữ nguyên (Tanaka, Kim, Lý...). Kính ngữ: sunbae→tiền bối, sensei→thầy, oppa→anh
+- Đại từ: tao/mày (thân), tôi/anh (trang trọng), anh/em (yêu), con/bố (gia đình)
+- Thán từ: くそ→Đ*t/Chết tiệt, やばい→Toang, すごい→Đỉnh, なに→Cái gì
+- Khẩu ngữ: oke, ngon, tởm, đỉnh, chill, toang...
+- Câu ngắn giữ ngắn, impact mạnh
+- TRÁNH: dịch kiểu sách giáo khoa, từ Hán Việt nhiều, thêm thắt lê thê{style_text}
+
+Input (JSON - các trang liên tiếp):
 {json.dumps(pages_texts, ensure_ascii=False, indent=2)}
 
-IMPORTANT: Return ONLY a valid JSON object with the exact same structure but with translated texts.
-Keep page names and bubble order exactly the same. No explanations or markdown."""
+Trả về ĐÚNG JSON object với cấu trúc GIỐNG HỆT, đã dịch. Không giải thích."""
 
         try:
             response = requests.post(
