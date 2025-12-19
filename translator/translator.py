@@ -20,6 +20,10 @@ class MangaTranslator:
         "ru": "rus_Cyrl",  # Russian
     }
     
+    # Class-level cache for heavy models to persist across requests
+    _nllb_cache = {"model": None, "tokenizer": None}
+    _hf_pipeline_cache = {}
+
     def __init__(self, source="ja", target="en", gemini_api_key=None):
         self.target = target
         self.source = source
@@ -72,13 +76,17 @@ class MangaTranslator:
         return translated_text if translated_text is not None else text
 
     def _translate_with_hf(self, text):
-        # Lazy load HF pipeline (cache it like NLLB)
-        if not hasattr(self, '_hf_pipeline') or self._hf_pipeline is None:
-            print("Loading HuggingFace translation model (first time)...")
-            self._hf_pipeline = pipeline("translation", model="Helsinki-NLP/opus-mt-ja-en")
+        # Lazy load HF pipeline (using class cache)
+        model_name = "Helsinki-NLP/opus-mt-ja-en"
+
+        if model_name not in self._hf_pipeline_cache:
+            print(f"Loading HuggingFace translation model {model_name} (first time)...")
+            self._hf_pipeline_cache[model_name] = pipeline("translation", model=model_name)
             print("HF pipeline loaded and cached!")
         
-        translated_text = self._hf_pipeline(text)[0]["translation_text"]
+        # Use cached pipeline
+        hf_pipeline = self._hf_pipeline_cache[model_name]
+        translated_text = hf_pipeline(text)[0]["translation_text"]
         return translated_text if translated_text is not None else text
 
     def _translate_with_baidu(self, text):
@@ -98,15 +106,26 @@ class MangaTranslator:
 
     def _load_nllb_model(self):
         """Lazy load NLLB model only when first needed (saves memory)"""
-        if self._nllb_model is None:
+        # Check class cache first
+        if self._nllb_cache["model"] is None:
             print("Loading NLLB model (first time, may take a moment)...")
             model_name = "facebook/nllb-200-distilled-600M"
-            self._nllb_tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self._nllb_model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+
+            # Load and cache
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+
             # Force CPU for stability
-            self._nllb_model = self._nllb_model.to("cpu")
-            self._nllb_model.eval()
-            print("NLLB model loaded successfully!")
+            model = model.to("cpu")
+            model.eval()
+
+            self._nllb_cache["tokenizer"] = tokenizer
+            self._nllb_cache["model"] = model
+            print("NLLB model loaded and cached globally!")
+
+        # Set instance variables from cache
+        self._nllb_tokenizer = self._nllb_cache["tokenizer"]
+        self._nllb_model = self._nllb_cache["model"]
 
     def _translate_with_nllb(self, text):
         """

@@ -52,6 +52,18 @@ def log(msg):
     if VERBOSE_LOG:
         print(msg)
 
+# Global cache for MangaOcr to avoid reloading on every request
+_manga_ocr_instance = None
+
+def get_manga_ocr():
+    """Get or create the global MangaOcr instance."""
+    global _manga_ocr_instance
+    if _manga_ocr_instance is None:
+        log("Loading MangaOcr model (first time)...")
+        _manga_ocr_instance = MangaOcr()
+        log("MangaOcr loaded and cached!")
+    return _manga_ocr_instance
+
 MODEL_PATH = "model/model.pt"
 
 # Default max height for split (1.5x width = landscape-ish ratio)
@@ -577,7 +589,8 @@ def upload_file():
     if selected_ocr == "chrome-lens":
         mocr = ChromeLensOCR()
     else:
-        mocr = MangaOcr()
+        # Use cached MangaOcr instance
+        mocr = get_manga_ocr()
     
     # Initialize font analyzer for auto font matching
     font_analyzer = None
