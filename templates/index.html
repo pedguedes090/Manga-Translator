@@ -17,6 +17,9 @@
    </header>
    <div class="container">
       <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Manga Translator">
+      {% if error %}
+      <div class="form-error">{{ error }}</div>
+      {% endif %}
       <form action="/translate" method="post" enctype="multipart/form-data" onsubmit="return updateHiddenInputs()">
 
          <!-- 2-column grid for dropdowns -->
@@ -72,9 +75,6 @@
                      <span class="option">Gemini</span>
                      <span class="option">Local LLM</span>
                      <span class="option">Google</span>
-                     <span class="option">NLLB</span>
-                     <span class="option">Baidu</span>
-                     <span class="option">Bing</span>
                   </div>
                </div>
             </div>
@@ -99,7 +99,7 @@
                </div>
             </div>
 
-            <!-- Row 3: Font & OCR -->
+            <!-- Row 3: Font -->
             <div class="select-wrapper">
                <label class="translator-label">Font</label>
                <div class="custom-select" id="font" tabindex="0">
@@ -108,7 +108,6 @@
                      <span class="icon">&#9660;</span>
                   </div>
                   <div class="options">
-                     <span class="option">Auto (Match Original)</span>
                      <span class="option">Animeace</span>
                      <span class="option">Mangat</span>
                      <span class="option">Arial</span>
@@ -136,47 +135,15 @@
                   </div>
                </div>
             </div>
-
-            <div class="select-wrapper">
-               <label class="translator-label">OCR Engine</label>
-               <div class="custom-select" id="ocr" tabindex="0">
-                  <div class="select-box">
-                     <span class="selected"></span>
-                     <span class="icon">&#9660;</span>
-                  </div>
-                  <div class="options">
-                     <span class="option">Chrome-Lens</span>
-                     <span class="option">Manga-OCR</span>
-                  </div>
-               </div>
+            <!-- Row 4: Manual Correction Toggle -->
+            <div class="select-wrapper" style="display: flex; align-items: center; gap: 12px; flex-direction: row;">
+               <label class="translator-label" style="margin-bottom: 0; white-space: nowrap;">Chỉnh sửa thủ công</label>
+               <label class="toggle-switch">
+                  <input type="checkbox" id="manual_correction" name="manual_correction" value="on">
+                  <span class="toggle-slider"></span>
+               </label>
+               <small style="color: #888; font-size: 11px;">Dừng sau OCR để thêm/xoá bóng thoại</small>
             </div>
-         </div>
-
-         <!-- Context Memory Toggle -->
-         <div class="select-wrapper full-width" style="margin-top: 10px;">
-            <label class="toggle-container">
-               <input type="checkbox" id="context_memory" name="context_memory" checked>
-               <span class="toggle-slider"></span>
-               <span class="toggle-label">🧠 Context Memory (dùng context từ tất cả ảnh để dịch chính xác hơn)</span>
-            </label>
-         </div>
-
-         <!-- Black Bubble Detection Toggle -->
-         <div class="select-wrapper full-width" style="margin-top: 10px;">
-            <label class="toggle-container">
-               <input type="checkbox" id="detect_black_bubbles" name="detect_black_bubbles" checked>
-               <span class="toggle-slider"></span>
-               <span class="toggle-label">🖤 Scan bóng thoại đen (phát hiện speech bubble tối màu bằng OpenCV)</span>
-            </label>
-         </div>
-
-         <!-- Split Long Images Toggle -->
-         <div class="select-wrapper full-width" style="margin-top: 10px;">
-            <label class="toggle-container">
-               <input type="checkbox" id="split_long_images" name="split_long_images">
-               <span class="toggle-slider"></span>
-               <span class="toggle-label">✂️ Cắt ảnh dài (tự động chia ảnh dài thành nhiều phần, phù hợp manhwa/webtoon)</span>
-            </label>
          </div>
 
          <!-- Custom Prompt (show when Custom selected) -->
@@ -208,22 +175,33 @@
             </div>
          </div>
 
-
          <!-- Gemini Settings (show when Gemini selected) -->
          <div id="gemini-settings" style="display: block; width: 100%;">
-            <div class="select-wrapper">
-               <label class="translator-label">Gemini API Key</label>
-               <input type="password" id="gemini_api_key" name="gemini_api_key"
-                  placeholder="Nhập API key của bạn (lấy từ ai.google.dev)"
-                  style="width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 14px;">
-               <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">
-                  🔒 Key được lưu trong trình duyệt của bạn (localStorage)
-               </small>
+            <div class="form-grid">
+               <div class="select-wrapper full-width">
+                  <label class="translator-label" for="gemini_model_input">Model Name</label>
+                  <input type="text" id="gemini_model_input" name="gemini_model_input"
+                     value="gemini-3.1-flash-lite" placeholder="gemini-3.1-flash-lite" class="text-input"
+                     autocomplete="off" spellcheck="false">
+                  <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">
+                     Nhập tên model Gemini muốn dùng cho bản dịch.
+                  </small>
+               </div>
+               <div class="select-wrapper full-width">
+                  <label class="translator-label" for="gemini_api_key">Gemini API Keys</label>
+                  <textarea id="gemini_api_key" name="gemini_api_key"
+                     placeholder="Dán mỗi API key một dòng. App sẽ tự đổi sang key tiếp theo khi key trước lỗi quota/auth."
+                     rows="3" class="text-area"></textarea>
+                  <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">
+                     🔒 Keys được lưu trong trình duyệt của bạn (localStorage), có thể phân tách bằng xuống dòng, dấu phẩy hoặc dấu chấm phẩy.
+                  </small>
+               </div>
             </div>
          </div>
 
          <!-- File upload -->
-         <input id="file-upload" type="file" name="files" accept=".jpg, .jpeg, .png" multiple required>
+         <input id="file-upload" type="file" name="files"
+            accept=".jpg, .jpeg, .png, .webp, .bmp, .tif, .tiff, .avif" multiple required>
          <label for="file-upload" class="file" id="file-label">
             <span id="file-text">📁 Chọn ảnh</span>
          </label>
@@ -234,7 +212,6 @@
          <input type="hidden" id="selected_translator" name="selected_translator">
          <input type="hidden" id="selected_style" name="selected_style">
          <input type="hidden" id="selected_font" name="selected_font">
-         <input type="hidden" id="selected_ocr" name="selected_ocr">
          <button type="submit">Translate</button>
       </form>
 
@@ -253,11 +230,9 @@
       <p id="loading-p">Đang xử lý... Vui lòng đợi!</p>
    </div>
 
-   <!-- Socket.IO for real-time progress -->
    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
    <script>
-      // Real-time progress updates
       document.addEventListener('DOMContentLoaded', function () {
          const socket = io();
          const progressContainer = document.getElementById('progress-container');
@@ -266,7 +241,6 @@
          const progressPhase = document.getElementById('progress-phase');
 
          const phaseNames = {
-            'detection': '🔍 Phát hiện bubbles',
             'ocr': '📖 OCR nhận dạng text',
             'translation': '🌐 Dịch văn bản',
             'rendering': '✏️ Render text vào ảnh',
@@ -275,18 +249,15 @@
 
          socket.on('progress', function (data) {
             progressContainer.style.display = 'block';
-
             const phaseName = phaseNames[data.phase] || data.phase;
             progressPhase.textContent = phaseName;
             progressBar.style.width = data.percent + '%';
             progressText.textContent = data.message;
-
             if (data.phase === 'done') {
                progressBar.style.background = 'linear-gradient(90deg, #50C878, #2ecc71)';
             }
          });
 
-         // Show progress when form submitted
          document.querySelector('form').addEventListener('submit', function () {
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';

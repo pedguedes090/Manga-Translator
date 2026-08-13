@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chỉnh sửa thủ công - Manga Translator</title>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/correction.css') }}">
+</head>
+<body>
+
+<div class="corr-topbar">
+  <a href="/" class="corr-logo">← Quay lại</a>
+  <span class="corr-title">✏️ Chỉnh sửa bóng thoại</span>
+  <span class="corr-stats"><span id="total-blocks">{{ total_blocks }}</span> bóng thoại · {{ images|length }} ảnh</span>
+</div>
+
+<div class="corr-toolbar">
+  <div class="tool-group">
+    <button class="tool-btn active" id="tool-select">🖱️ Chọn</button>
+    <button class="tool-btn" id="tool-add">＋ Thêm</button>
+    <button class="tool-btn" id="tool-delete">🗑️ Xoá</button>
+    <button class="tool-btn" id="tool-undo">↩ Undo</button>
+    <button class="tool-btn" id="tool-redo">↪ Redo</button>
+    <button class="tool-btn" id="tool-reset">↺ Reset</button>
+  </div>
+  <div class="zoom-group" aria-label="Điều khiển zoom">
+    <button class="zoom-btn" id="zoom-out" title="Thu nhỏ (-)">−</button>
+    <span class="zoom-label" id="zoom-label">Fit</span>
+    <button class="zoom-btn" id="zoom-in" title="Phóng to (+)">＋</button>
+    <button class="zoom-btn" id="zoom-fit" title="Vừa màn hình">Fit</button>
+    <button class="zoom-btn" id="zoom-actual" title="Kích thước thật">100%</button>
+  </div>
+  <span class="shortcuts"><kbd>S</kbd> Chọn <kbd>A</kbd> Thêm <kbd>D</kbd> Xoá <kbd>Ctrl+Wheel</kbd> Zoom <kbd>Space</kbd> Kéo ảnh <kbd>←→</kbd> Ảnh</span>
+</div>
+
+<div class="corr-body">
+  <div class="corr-sidebar">
+    <div id="image-thumbnails">
+      {% for img in images %}
+      <div class="thumb-item {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}">
+        <canvas class="thumb-canvas" id="thumb-{{ loop.index0 }}"></canvas>
+        <span class="thumb-name">{{ img.name }}</span>
+        <span class="thumb-count">{{ img.blocks|length }} blocks</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="corr-canvas-wrap">
+    <div class="canvas-outer">
+      <canvas id="main-canvas"></canvas>
+    </div>
+    <div class="canvas-nav">
+      <button id="btn-prev" class="nav-btn">← Trước</button>
+      <span id="current-image-label"></span>
+      <button id="btn-next" class="nav-btn">Sau →</button>
+    </div>
+  </div>
+
+  <div class="corr-editor" id="block-editor">
+    <h3>Thuộc tính</h3>
+    <div id="block-properties">
+      <p class="no-sel">Chọn bóng thoại để chỉnh sửa</p>
+    </div>
+    <div class="ocr-status" id="ocr-status"></div>
+  </div>
+</div>
+
+<div class="corr-footer">
+  <a href="/" class="btn-outline">Huỷ</a>
+  <button id="btn-continue" class="btn-primary">✅ Tiếp tục dịch & Render</button>
+</div>
+
+<form id="continue-form" method="POST" action="/continue-translate" style="display:none;">
+  <input type="hidden" name="session_id" value="{{ session_id }}">
+  <input type="hidden" name="modified_blocks" id="modified-blocks-input">
+</form>
+
+<div id="toast" class="toast"></div>
+
+<script>
+window.CORRECTION_DATA = {
+    sessionId: {{ session_id | tojson }},
+    images: {{ images | tojson }}
+};
+</script>
+<script src="{{ url_for('static', filename='js/correction.js') }}"></script>
+</body>
+</html>

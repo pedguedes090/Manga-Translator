@@ -1,22 +1,18 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-
-# Virtual environments
+.venv/
 venv/
-env/
-.env/
 
-# IDE
-.vscode/
-.idea/
+.pytest_cache/
+.playwright-mcp/
 
-# OS files
-.DS_Store
-Thumbs.db
+debug_outputs/
+temp_sessions/
+audit-current-project/
+server_*.log
+test_result_phase1.png
 
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
+.env
+.env.*
+!.env.example

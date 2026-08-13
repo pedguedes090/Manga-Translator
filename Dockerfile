@@ -1,59 +1,48 @@
-# Manga Translator - HuggingFace Spaces Dockerfile
-# Uses Python 3.10 with CUDA support for YOLO model
+# Manga Translator container build.
+# The Python version is fixed inside the image so users do not depend on their
+# local Python install. Override with:
+#   docker build --build-arg PYTHON_VERSION=3.10 -t manga-translator .
 
-FROM python:3.10-slim
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-slim AS runtime
 
-# Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HOST=0.0.0.0 \
+    PORT=7860 \
+    MAX_UPLOAD_MB=50
 
-# HuggingFace Spaces specific settings
-ENV GRADIO_SERVER_NAME="0.0.0.0" \
-    GRADIO_SERVER_PORT=7860
-
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
+    libxrender1 \
     libgomp1 \
-    wget \
-    curl \
     fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
-# Create app user (HuggingFace Spaces requirement)
-RUN useradd -m -u 1000 user
+RUN useradd --create-home --uid 1000 appuser
+
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY --chown=user requirements.txt .
+COPY requirements.txt .
+RUN python -m pip install --upgrade pip setuptools wheel \
+    && python -m pip install -r requirements.txt
 
-# Install Python dependencies
-RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+COPY . .
 
-# Copy application files
-COPY --chown=user . .
+RUN mkdir -p /app/temp_sessions /app/debug_outputs \
+    && chown -R appuser:appuser /app
 
-# Create necessary directories with proper permissions
-RUN mkdir -p /app/uploads /app/outputs && \
-    chown -R user:user /app
+USER appuser
 
-# Switch to non-root user
-USER user
-
-# Expose port for HuggingFace Spaces
 EXPOSE 7860
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://localhost:7860/ || exit 1
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/' % os.environ.get('PORT', '7860'), timeout=5)"
 
-# Run with gunicorn for production
-CMD ["gunicorn", "--bind", "0.0.0.0:7860", "--workers", "1", "--threads", "4", "--timeout", "120", "app:app"]
+CMD ["python", "app.py"]

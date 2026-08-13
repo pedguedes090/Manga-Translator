@@ -14,6 +14,7 @@ body {
 
 header {
 	width: 100%;
+	box-sizing: border-box;
 	box-shadow: 0 0 10px #cccccc;
 	background-image: url("../img/header.png");
 	background-size: 100% 100%;
@@ -41,6 +42,24 @@ header {
 
 form {
 	text-align: center;
+}
+
+.form-error,
+.result-warning {
+	background: #fff4e5;
+	border: 1px solid #d68a00;
+	border-radius: 8px;
+	color: #4f2f00;
+	font-size: 14px;
+	line-height: 1.45;
+	margin-bottom: 18px;
+	padding: 12px 14px;
+	text-align: left;
+}
+
+.result-warning {
+	margin: 0 auto 24px;
+	max-width: 900px;
 }
 
 /* 2-column grid layout */
@@ -152,7 +171,8 @@ label.translator-label {
 	box-sizing: border-box;
 }
 
-#custom_prompt:focus {
+#custom_prompt:focus,
+.text-area:focus {
 	outline: none;
 	border-color: #5E1675;
 }
@@ -175,7 +195,24 @@ label.translator-label {
 }
 
 .text-input::placeholder {
-	color: #aaa;
+	color: #777;
+}
+
+.text-area {
+	width: 100%;
+	padding: 12px 14px;
+	border: 1px solid #ddd;
+	border-radius: 8px;
+	font-size: 14px;
+	font-family: inherit;
+	line-height: 1.45;
+	resize: vertical;
+	box-sizing: border-box;
+	transition: border-color 0.2s;
+}
+
+.text-area::placeholder {
+	color: #777;
 }
 
 
@@ -187,6 +224,7 @@ input[type="file"] {
 .file {
 	display: block;
 	width: 100%;
+	box-sizing: border-box;
 	padding: 16px;
 	border: 2px dashed #5E1675;
 	border-radius: 10px;
@@ -291,6 +329,35 @@ button:active {
 	box-shadow: 0 8px 25px rgba(0, 0, 0, 0.15);
 }
 
+.compare-tabs {
+	display: flex;
+	gap: 6px;
+	padding: 10px 10px 0;
+}
+
+.compare-tab {
+	background: #f2eef5;
+	border: 1px solid #ded1e6;
+	border-radius: 6px;
+	color: #4a1160;
+	cursor: pointer;
+	font-size: 12px;
+	font-weight: 600;
+	margin: 0;
+	padding: 7px 10px;
+	width: auto;
+}
+
+.compare-tab:hover {
+	background: #eadff0;
+}
+
+.compare-tab.active {
+	background: #5E1675;
+	border-color: #5E1675;
+	color: white;
+}
+
 .gallery-image {
 	width: 100%;
 	height: auto;
@@ -351,6 +418,15 @@ button:active {
 
 .green:hover {
 	background: #3da85c;
+}
+
+.purple-link {
+	background: #5E1675;
+	color: white;
+}
+
+.purple-link:hover {
+	background: #4a1160;
 }
 
 .red {
@@ -422,4 +498,9 @@ button:active {
 	.container {
 		padding: 20px;
 	}
-}
+}  
+.toggle-switch {position:relative;display:inline-block;width:50px;height:26px;flex-shrink:0}  
+.toggle-switch input {opacity:0;width:0;height:0}  
+.toggle-switch .toggle-slider {position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0}  
+.toggle-switch input:checked + .toggle-slider {background-color:#5E1675}  
+.toggle-switch input:checked + .toggle-slider::before {transform:translateX(24px)} 

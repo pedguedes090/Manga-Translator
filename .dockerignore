@@ -5,9 +5,12 @@ __pycache__/
 *.so
 
 # Virtual environments
+.venv/
 venv/
 env/
 .env
+.env.*
+!.env.example
 
 # IDE
 .vscode/
@@ -21,10 +24,14 @@ Thumbs.db
 
 # Logs
 *.log
+server_*.log
 
 # Uploads and outputs (runtime)
 uploads/
 outputs/
+temp_sessions/
+debug_outputs/
+audit-current-project/
 
 # Model weights (will be downloaded at runtime or included separately)
 # model/*.pt
@@ -34,6 +41,7 @@ outputs/
 
 # Testing
 .pytest_cache/
+.playwright-mcp/
 .coverage
 htmlcov/
 
@@ -41,3 +49,7 @@ htmlcov/
 dist/
 build/
 *.egg-info/
+
+# Git metadata is not needed inside the image
+.git/
+.github/

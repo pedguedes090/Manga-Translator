@@ -18,12 +18,25 @@
 
    <div class="results-container">
       <h2 class="results-title">✨ Kết quả dịch ({{ images|length }} ảnh)</h2>
+      {% if warning %}
+      <div class="result-warning">{{ warning }}</div>
+      {% endif %}
 
       {% if images %}
       <div class="image-gallery">
          {% for img in images %}
          <div class="image-card">
-            <img class="gallery-image" src="data:image/jpeg;base64,{{ img.data }}" alt="{{ img.name }}">
+            {% if img.original_data %}
+            <div class="compare-tabs" aria-label="So sánh ảnh {{ img.name }}">
+               <button type="button" class="compare-tab active" data-target="translated">Đã dịch</button>
+               <button type="button" class="compare-tab" data-target="original">Gốc</button>
+            </div>
+            {% endif %}
+            <img class="gallery-image"
+               src="data:image/jpeg;base64,{{ img.data }}"
+               data-translated="data:image/jpeg;base64,{{ img.data }}"
+               {% if img.original_data %}data-original="data:image/jpeg;base64,{{ img.original_data }}"{% endif %}
+               alt="{{ img.name }}">
             <div class="image-info">
                <span class="image-name">{{ img.name }}</span>
                <a href="#" class="download-btn" data-image="{{ img.data }}" data-name="{{ img.name }}">
@@ -40,6 +53,9 @@
 
    <div class="buttons_image">
       <a href="#" class="green" id="download-zip">📦 Download ZIP</a>
+      {% if correction_session_id %}
+      <a href="/correction/{{ correction_session_id }}" class="purple-link">✏️ Quay lại chỉnh OCR</a>
+      {% endif %}
       <a href="/" class="red">← Quay lại</a>
    </div>
 
@@ -67,9 +83,30 @@
          const imageData = btn.getAttribute('data-image');
          const imageName = btn.getAttribute('data-name');
          const a = document.createElement('a');
-         a.href = 'data:image/png;base64,' + imageData;
-         a.download = imageName + '_translated.png';
+         a.href = 'data:image/jpeg;base64,' + imageData;
+         a.download = imageName + '_translated.jpg';
          a.click();
+      });
+   });
+
+   document.querySelectorAll('.image-card').forEach(card => {
+      const image = card.querySelector('.gallery-image');
+      const tabs = card.querySelectorAll('.compare-tab');
+      if (!image || tabs.length === 0) return;
+
+      tabs.forEach(tab => {
+         tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+
+            const target = tab.getAttribute('data-target');
+            const src = target === 'original'
+               ? image.getAttribute('data-original')
+               : image.getAttribute('data-translated');
+            if (src) {
+               image.src = src;
+            }
+         });
       });
    });
 
@@ -93,7 +130,7 @@
 
             // Convert base64 to binary and add to ZIP
             const binaryData = atob(data);
-            folder.file(`${name}_translated.png`, binaryData, { binary: true });
+            folder.file(`${name}_translated.jpg`, binaryData, { binary: true });
          });
 
          // Generate ZIP and trigger download

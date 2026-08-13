@@ -1,106 +1,633 @@
-from flask import Flask, render_template, request, redirect, send_file, jsonify
-from flask_socketio import SocketIO, emit
+"""
+Manga Translator - Flask Web Application
+OCR full image with Chrome Lens (text blocks + bounding boxes),
+then erase original text and render translated text in place.
+"""
+from flask import Flask, render_template, request, redirect, send_file
+from flask_socketio import SocketIO
+from werkzeug.utils import secure_filename
 import io
 import zipfile
 import json
 import warnings
 import os
+import re
 import sys
+import time
+import uuid
 
-# Suppress deprecation warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-from detect_bubbles import detect_bubbles
-from process_bubble import process_bubble, process_bubble_auto, is_dark_bubble, get_bubble_background_color, get_dominant_color, process_bubble_preserve_gradient
+for stream in (sys.stdout, sys.stderr):
+    try:
+        stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from translator.translator import MangaTranslator
-from translator.context_memory import ContextMemory
-from add_text import add_text
-from manga_ocr import MangaOcr
+from add_text import (
+    add_text_bbox,
+    assess_erasability,
+    erase_text_region,
+    merge_nearby_ocr_blocks,
+    refine_tall_narrow_ocr_bbox,
+    render_all_blocks,
+    should_skip_ocr_artifact,
+)
 from ocr.chrome_lens_ocr import ChromeLensOCR
 from PIL import Image
 import numpy as np
 import base64
 import cv2
+import threading
+import math
 
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret_key")
+app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
 
-# Initialize SocketIO with auto-detected async mode
+
 def get_async_mode():
-    if getattr(sys, 'frozen', False):
-        return 'threading'
-    try:
-        import eventlet
-        return 'eventlet'
-    except ImportError:
-        pass
-    try:
-        import gevent
-        return 'gevent'
-    except ImportError:
-        pass
-    return 'threading'
+    return os.environ.get("SOCKETIO_ASYNC_MODE", "threading")
+
+
+# ── Background session cleanup thread ──
+def _start_cleanup_thread(interval_seconds=600):
+    """Run cleanup_old_sessions periodically in a daemon thread."""
+    import time as _time
+
+    def _cleanup_loop():
+        while True:
+            _time.sleep(interval_seconds)
+            try:
+                cleanup_old_sessions()
+            except Exception as e:
+                print(f"Session cleanup error: {e}")
+
+    t = threading.Thread(target=_cleanup_loop, daemon=True, name="session-cleanup")
+    t.start()
+    return t
+
 
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode=get_async_mode())
+_start_cleanup_thread(interval_seconds=600)  # every 10 minutes
 
-# Control verbose logging (set VERBOSE_LOG=1 to enable debug output)
-VERBOSE_LOG = os.environ.get("VERBOSE_LOG", "0") == "1"
+# In-memory session storage for manual correction
+TEMP_DIR = os.path.join(os.path.dirname(__file__), "temp_sessions")
+os.makedirs(TEMP_DIR, exist_ok=True)
+ocr_sessions = {}
+MAX_MEMORY_SESSIONS = 20
+SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", 6 * 3600))
+BBOX_EXPAND_RATIO = 0.03
+ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "avif"}
+SUPPORTED_IMAGE_FORMATS_LABEL = "JPG, JPEG, PNG, WebP, BMP, TIFF hoặc AVIF"
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
-def log(msg):
-    """Print only if verbose logging is enabled."""
-    if VERBOSE_LOG:
-        print(msg)
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
-MODEL_PATH = "model/model.pt"
 
-# Default max height for split (1.5x width = landscape-ish ratio)
-DEFAULT_SPLIT_HEIGHT_RATIO = 2.0
+def parse_gemini_api_keys(raw_value):
+    """Parse newline/comma/semicolon separated Gemini keys, preserving order."""
+    seen = set()
+    keys = []
+    for key in re.split(r"[\s,;]+", raw_value or ""):
+        key = key.strip()
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
 
-# Global cache for OCR instances
-_OCR_CACHE = {
-    "chrome_lens": None,
-    "manga_ocr": None
-}
 
-def split_long_image(image: np.ndarray, max_height_ratio: float = DEFAULT_SPLIT_HEIGHT_RATIO) -> list:
+def is_allowed_image_file(filename):
+    if not filename or "." not in filename:
+        return False
+    ext = filename.rsplit(".", 1)[1].lower()
+    return ext in ALLOWED_IMAGE_EXTENSIONS
+
+
+def clean_image_name(filename):
+    raw_stem = os.path.splitext(os.path.basename(filename or ""))[0]
+    if not re.search(r"[A-Za-z0-9]", raw_stem):
+        return "image"
+    safe = secure_filename(filename or "")
+    name = os.path.splitext(safe)[0].strip("._- ")
+    return name or "image"
+
+
+def _safe_session_path(session_id):
+    """Validate session_id as UUID and return its directory path (prevents path traversal)."""
+    if not session_id or not _UUID_RE.match(session_id.strip().lower()):
+        return None
+    sid = session_id.strip().lower()
+    return os.path.join(TEMP_DIR, sid)
+
+
+def _session_json_path(session_id):
+    """Return path to the session JSON file."""
+    base = _safe_session_path(session_id)
+    if not base:
+        return None
+    return os.path.join(base, "session.json")
+
+
+def _session_image_path(session_id, idx):
+    """Return path to a session image JPEG file."""
+    base = _safe_session_path(session_id)
+    if not base:
+        return None
+    return os.path.join(base, f"page_{idx}.jpg")
+
+
+def cleanup_old_sessions():
+    """Remove expired session directories from disk and trim the in-memory cache."""
+    now = time.time()
+    try:
+        for fname in os.listdir(TEMP_DIR):
+            fpath = os.path.join(TEMP_DIR, fname)
+            if not os.path.isdir(fpath):
+                # Clean up legacy .pkl files
+                if fname.endswith(".pkl"):
+                    try:
+                        os.remove(fpath)
+                    except OSError:
+                        pass
+                continue
+            try:
+                if now - os.path.getmtime(fpath) > SESSION_TTL_SECONDS:
+                    import shutil
+                    shutil.rmtree(fpath, ignore_errors=True)
+                    ocr_sessions.pop(fname, None)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    # Bound in-memory cache size (drop oldest inserted first)
+    while len(ocr_sessions) > MAX_MEMORY_SESSIONS:
+        ocr_sessions.pop(next(iter(ocr_sessions)), None)
+
+
+def _save_session(session_id, session_data):
+    """Save session to disk as JSON + JPEG images (lightweight, no pickle)."""
+    base = _safe_session_path(session_id)
+    if not base:
+        return
+    os.makedirs(base, exist_ok=True)
+
+    # Write images as JPEG files
+    all_ocr_results = session_data.get('all_ocr_results', [])
+    for i, (name, image, blocks) in enumerate(all_ocr_results):
+        img_path = os.path.join(base, f"page_{i}.jpg")
+        # Only write if not already cached (avoid redundant writes)
+        if not os.path.exists(img_path):
+            cv2.imwrite(img_path, image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+
+    # Write metadata as JSON (no numpy arrays, no pickle)
+    json_data = {}
+    for key, value in session_data.items():
+        if key == 'all_ocr_results':
+            # Store block metadata too. The correction flow needs flags such as
+            # _bbox_expanded to avoid expanding already-normalized boxes again.
+            json_data[key] = [
+                {
+                    'name': str(name),
+                    'blocks': [
+                        {
+                            block_key: block_value
+                            for block_key, block_value in dict(b).items()
+                            if _is_json_serializable(block_value)
+                        }
+                        for b in blocks
+                    ],
+                }
+                for name, _, blocks in all_ocr_results
+            ]
+        else:
+            # Only store JSON-serializable values
+            try:
+                json.dumps(value)
+                json_data[key] = value
+            except (TypeError, ValueError):
+                json_data[key] = str(value)
+
+    json_path = os.path.join(base, "session.json")
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(json_data, f, ensure_ascii=False, indent=2)
+
+    # Cache in memory (keep the original data with images for active use)
+    ocr_sessions[session_id.strip().lower()] = session_data
+
+
+def load_session(session_id):
+    """Load session data from memory cache, falling back to disk (JSON + JPEG)."""
+    base = _safe_session_path(session_id)
+    if not base:
+        return None
+    sid = session_id.strip().lower()
+    if sid in ocr_sessions:
+        return ocr_sessions[sid]
+    if not os.path.isdir(base):
+        return None
+
+    json_path = os.path.join(base, "session.json")
+    if not os.path.exists(json_path):
+        return None
+
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            json_data = json.load(f)
+    except Exception as e:
+        print(f"Failed to load session JSON {sid}: {e}")
+        return None
+
+    # Reconstruct all_ocr_results with images loaded from JPEG files
+    all_ocr_results = []
+    for i, img_meta in enumerate(json_data.get('all_ocr_results', [])):
+        img_path = os.path.join(base, f"page_{i}.jpg")
+        if os.path.exists(img_path):
+            image = cv2.imread(img_path)
+            if image is None:
+                continue
+        else:
+            continue
+        blocks = img_meta.get('blocks', [])
+        all_ocr_results.append((img_meta['name'], image, blocks))
+
+    # Rebuild session data
+    data = dict(json_data)
+    data['all_ocr_results'] = all_ocr_results
+    data.pop('all_texts', None)  # Will be rebuilt by caller
+
+    ocr_sessions[sid] = data
+    return data
+
+
+def _is_json_serializable(value):
+    try:
+        json.dumps(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def get_font_path(font_name: str) -> str:
+    if font_name in ["animeace_", "arial", "mangat"]:
+        return f"fonts/{font_name}i.ttf"
+    elif font_name.startswith("Yuki-") or font_name.startswith("yuki-"):
+        return f"fonts/{font_name}.ttf"
+    else:
+        return f"fonts/{font_name}.ttf"
+
+
+def emit_progress(phase, current, total, message):
+    try:
+        socketio.emit('progress', {
+            'phase': phase,
+            'current': current,
+            'total': total,
+            'message': message,
+            'percent': int((current / max(total, 1)) * 100)
+        })
+    except Exception:
+        pass
+
+
+def _short_log_text(text, max_len=36):
+    cleaned = re.sub(r'\s+', ' ', str(text or '')).strip()
+    return cleaned if len(cleaned) <= max_len else cleaned[:max_len - 3] + "..."
+
+
+def normalize_bbox_for_json(bbox, image_shape=None, expand_ratio=0):
+    if not bbox or len(bbox) < 4:
+        return None
+
+    coords = []
+    for value in bbox[:4]:
+        try:
+            if isinstance(value, np.generic):
+                value = value.item()
+            coords.append(int(round(float(value))))
+        except (TypeError, ValueError):
+            return None
+
+    x1, y1, x2, y2 = coords
+    if x2 < x1:
+        x1, x2 = x2, x1
+    if y2 < y1:
+        y1, y2 = y2, y1
+
+    if expand_ratio and x2 > x1 and y2 > y1:
+        pad_x = max(1, int(math.ceil((x2 - x1) * expand_ratio)))
+        pad_y = max(1, int(math.ceil((y2 - y1) * expand_ratio)))
+        x1 -= pad_x
+        y1 -= pad_y
+        x2 += pad_x
+        y2 += pad_y
+
+    if image_shape is not None:
+        h, w = image_shape[:2]
+        x1 = max(0, min(int(w), x1))
+        y1 = max(0, min(int(h), y1))
+        x2 = max(0, min(int(w), x2))
+        y2 = max(0, min(int(h), y2))
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return [x1, y1, x2, y2]
+
+
+def filter_ocr_blocks(blocks, image, source_lang):
+    image_shape = image.shape
+    candidate_blocks = []
+    skipped = 0
+    for raw_index, block in enumerate(blocks):
+        raw_bbox = block.get("bbox")
+        if should_skip_ocr_artifact(
+            block.get("text", ""),
+            raw_bbox,
+            image_shape=image_shape,
+            source_lang=source_lang,
+        ):
+            skipped += 1
+            continue
+
+        refined_bbox = refine_tall_narrow_ocr_bbox(
+            image,
+            raw_bbox,
+            source_lang=source_lang,
+            text=block.get("text", ""),
+        )
+        expanded_bbox = normalize_bbox_for_json(
+            refined_bbox,
+            image_shape=image_shape,
+            expand_ratio=BBOX_EXPAND_RATIO,
+        )
+        if not expanded_bbox:
+            skipped += 1
+            continue
+
+        block = dict(block)
+        block["bbox"] = expanded_bbox
+        block["_bbox_expanded"] = True
+        block["_ocr_index"] = raw_index
+        candidate_blocks.append(block)
+
+    merged_blocks = merge_nearby_ocr_blocks(candidate_blocks)
+    if len(merged_blocks) < len(candidate_blocks):
+        print(f"  [MERGE OCR] {len(candidate_blocks)} block(s) -> {len(merged_blocks)} region(s)")
+
+    filtered_blocks = []
+    for block in merged_blocks:
+        expanded_bbox = block.get("bbox")
+        erasability = assess_erasability(
+            image,
+            expanded_bbox,
+            text=block.get("text", ""),
+            source_lang=source_lang,
+        )
+        if not erasability.get("safe"):
+            skipped += 1
+            print(
+                f"  [SKIP ERASE] '{_short_log_text(block.get('text', ''))}' "
+                f"reason={erasability.get('reason')} "
+                f"score={float(erasability.get('score', 0)):.2f}"
+            )
+            continue
+
+        block["_erasability"] = {
+            "reason": erasability.get("reason"),
+            "score": erasability.get("score"),
+        }
+        print(
+            f"  [SAFE ERASE] '{_short_log_text(block.get('text', ''))}' "
+            f"reason={erasability.get('reason')} "
+            f"score={float(erasability.get('score', 0)):.2f}"
+        )
+        filtered_blocks.append(block)
+    return filtered_blocks, skipped
+
+
+def build_preview_images(all_ocr_results, source_lang="ja"):
+    """Build preview images for the correction page.
+    Uses JPEG compression to reduce transfer size while keeping full resolution
+    for accurate coordinate mapping.
     """
-    Split a long image into multiple shorter chunks.
+    preview_images = []
+    for name, image, blocks in all_ocr_results:
+        _, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, 75])
+        encoded = base64.b64encode(buffer.tobytes()).decode("utf-8")
+        preview_images.append({
+            "name": str(name),
+            "data": encoded,
+            "blocks": [
+                {
+                    "text": str(b.get("text", "") or ""),
+                    "bbox": normalize_bbox_for_json(
+                        refine_tall_narrow_ocr_bbox(
+                            image,
+                            b.get("bbox"),
+                            source_lang=source_lang,
+                            text=b.get("text", ""),
+                        ),
+                        image_shape=image.shape,
+                        expand_ratio=0 if b.get("_bbox_expanded") else BBOX_EXPAND_RATIO,
+                    ),
+                }
+                for b in blocks
+            ],
+            "width": int(image.shape[1]),
+            "height": int(image.shape[0]),
+        })
+    return preview_images
+
+
+def encode_image_jpeg(image, quality=95):
+    ok, buffer = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not ok:
+        raise ValueError("Could not encode image as JPEG")
+    return base64.b64encode(buffer.tobytes()).decode("utf-8")
+
+
+def build_result_images(processed_results, original_images_by_name=None):
+    original_images_by_name = original_images_by_name or {}
+    processed_images = []
+    for result in processed_results:
+        image = result['image']
+        name = result['name']
+        item = {
+            "name": name,
+            "data": encode_image_jpeg(image, quality=95),
+        }
+        original_image = original_images_by_name.get(name)
+        if original_image is not None:
+            item["original_data"] = encode_image_jpeg(original_image, quality=90)
+        processed_images.append(item)
+    return processed_images
+
+
+def snapshot_original_images(all_ocr_results):
+    return {name: image.copy() for name, image, _ in all_ocr_results}
+
+
+def translate_and_render(all_ocr_results, translator_obj, selected_font, translator_type,
+                         source_lang, target_lang, style):
+    """Phase 2+3: Translate all texts then render (used when OCR is already done)"""
+    total_images = len(all_ocr_results)
+    all_texts = []
+    for _, _, blocks in all_ocr_results:
+        for block in blocks:
+            text = block.get('text', '').strip()
+            if text:
+                block['_text_idx'] = len(all_texts)
+                all_texts.append(text)
     
-    Args:
-        image: Input image as numpy array (H, W, C)
-        max_height_ratio: Maximum height/width ratio before splitting.
-                          Images taller than width * ratio will be split.
-                          
-    Returns:
-        List of image chunks (numpy arrays). If image doesn't need splitting,
-        returns a list with just the original image.
-    """
-    height, width = image.shape[:2]
-    max_height = int(width * max_height_ratio)
+    if not all_texts:
+        print("No text to translate.")
+        emit_progress('done', total_images, total_images, 'Không có text để dịch')
+        return [{'name': name, 'image': image} for name, image, _ in all_ocr_results]
     
-    # If image is not too tall, return as-is
-    if height <= max_height:
-        return [image]
-    
-    # Split into chunks
-    chunks = []
-    current_y = 0
-    chunk_num = 0
-    
-    while current_y < height:
-        # Calculate chunk end position
-        chunk_end = min(current_y + max_height, height)
-        
-        # Extract chunk
-        chunk = image[current_y:chunk_end, :].copy()
-        chunks.append(chunk)
-        
-        current_y = chunk_end
-        chunk_num += 1
-    
-    print(f"  Split image ({width}x{height}) into {len(chunks)} chunks")
-    return chunks
+    # Phase 2: Batch translate
+    emit_progress('translation', 0, 1, f'Đang dịch {len(all_texts)} đoạn text...')
+    print(f"\n[Phase 2] Translating {len(all_texts)} text segments...")
+
+    if translator_type == "gemini":
+        gemini_translator = getattr(translator_obj, '_gemini_translator', None)
+        if gemini_translator is None:
+            print("Gemini translator is not initialized; keeping original texts")
+            translator_obj.last_warning = (
+                "Gemini chưa được khởi tạo nên app giữ nguyên text gốc. "
+                "Hãy kiểm tra API key rồi thử lại."
+            )
+            translated_texts = all_texts
+        else:
+            try:
+                translated_texts = gemini_translator.translate_batch(all_texts, source_lang, target_lang)
+            except Exception as e:
+                print(f"Gemini batch failed: {e}, falling back to single")
+                try:
+                    translated_texts = [
+                        gemini_translator.translate_single(t, source_lang, target_lang)
+                        for t in all_texts
+                    ]
+                except Exception as e2:
+                    print(f"Gemini single translation also failed: {e2}")
+                    translator_obj.last_warning = (
+                        "Gemini không dịch được nên app giữ nguyên text gốc. "
+                        "Hãy kiểm tra API key/quota rồi thử lại."
+                    )
+                    translated_texts = all_texts
+
+    elif translator_type == "copilot":
+        try:
+            from translator.local_llm_translator import LocalLLMTranslator
+            if not hasattr(translator_obj, '_local_llm_tr') or translator_obj._local_llm_tr is None:
+                translator_obj._local_llm_tr = LocalLLMTranslator(
+                    server_url=getattr(translator_obj, '_copilot_server', 'http://localhost:8080'),
+                    model=getattr(translator_obj, '_copilot_model', 'gpt-4o'),
+                    custom_prompt=getattr(translator_obj, '_copilot_custom_prompt', None)
+                )
+            translated_texts = translator_obj._local_llm_tr.translate_batch(all_texts, source_lang, target_lang)
+        except Exception as e:
+            print(f"Local LLM batch failed: {e}, falling back to single translations")
+            emit_progress('translation', 0, 1, f'Batch failed, falling back to single translations...')
+            try:
+                translated_texts = [translator_obj._local_llm_tr.translate_single(t, source_lang, target_lang) for t in all_texts]
+            except Exception as e2:
+                print(f"Local LLM single translation also failed: {e2}")
+                translator_obj.last_warning = (
+                    "Local LLM không dịch được nên app giữ nguyên text gốc. "
+                    "Hãy kiểm tra server URL/model rồi thử lại."
+                )
+                translated_texts = all_texts
+
+    elif translator_type == "google":
+        try:
+            translated_texts = translator_obj.translate_batch_google(all_texts)
+        except Exception as e:
+            print(f"Google batch translation failed: {e}")
+            translator_obj.last_warning = "Google Translate lỗi nên app giữ nguyên text gốc."
+            translated_texts = all_texts
+
+    else:
+        print(f"WARNING: Unrecognized translator type '{translator_type}', no translation performed")
+        emit_progress('translation', 0, 1, f'Cảnh báo: Translator không xác định, text không được dịch')
+        translator_obj.last_warning = "Translator không xác định nên app giữ nguyên text gốc."
+        translated_texts = all_texts
+
+    print("OK Translation completed")
+    emit_progress('translation', 1, 1, 'Dịch hoàn tất')
+
+    # Phase 3: Render
+    emit_progress('rendering', 0, total_images, 'Đang render text vào ảnh...')
+    print(f"\n[Phase 3] Rendering translated text...")
+
+    font_path = get_font_path(selected_font)
+    processed_results = []
+
+    # Prepare rendering data for each image
+    skipped_count = 0
+
+    def render_single_image(idx_name_image_blocks):
+        nonlocal skipped_count
+        idx, name, image, blocks = idx_name_image_blocks
+        render_blocks = []
+        for block in blocks:
+            text = block.get('text', '').strip()
+            if not text:
+                continue
+            bbox = block.get('bbox')
+            if not bbox or len(bbox) < 4:
+                continue
+
+            text_idx = block.get('_text_idx', -1)
+            if 0 <= text_idx < len(translated_texts):
+                translated = translated_texts[text_idx]
+            else:
+                translated = text
+
+            if not translated or not translated.strip():
+                continue
+
+            if should_skip_ocr_artifact(text, bbox, image_shape=image.shape,
+                                        source_lang=source_lang):
+                skipped_count += 1
+                print(f"  [SKIP OCR ARTIFACT] '{text}'")
+                continue
+
+            # Analyze background and erase original text
+            image, text_color, appearance = erase_text_region(
+                image, bbox, source_lang=source_lang
+            )
+
+            appearance['should_skip'] = False
+            render_blocks.append({
+                'text': translated,
+                'bbox': bbox,
+                'text_color': text_color,
+                'appearance': appearance,
+            })
+
+        if render_blocks:
+            image = render_all_blocks(image, render_blocks, font_path)
+
+        return {'name': name, 'image': image}
+
+    # Sequential rendering — ThreadPoolExecutor provides negligible speedup here
+    # because PIL ImageDraw operations hold the GIL, and the progress_lock +
+    # emit_progress calls serialize most of the parallel work anyway.
+    for idx, (name, image, blocks) in enumerate(all_ocr_results):
+        emit_progress('rendering', idx + 1, total_images, f'Render: {name}')
+        result = render_single_image((idx, name, image, blocks))
+        processed_results.append(result)
+    print("OK Rendering completed")
+    if skipped_count > 0:
+        print(f"  Skipped {skipped_count} OCR artifact block(s)")
+    emit_progress('done', total_images, total_images, f'Hoàn tất! {total_images} ảnh')
+
+    return processed_results
 
 
 @app.route("/")
@@ -108,406 +635,35 @@ def home():
     return render_template("index.html")
 
 
-def process_single_image(image, manga_translator, mocr, selected_translator, selected_font, font_analyzer=None, enable_black_bubble=True):
-    """Process a single image and return the translated version.
-    
-    Optimized with batch translation for Gemini to reduce API calls.
-    Supports auto font matching when font_analyzer is provided and selected_font is 'auto'.
-    """
-    results = detect_bubbles(MODEL_PATH, image, enable_black_bubble)
-    
-    if not results:
-        return image
-    
-    # Phase 1: Collect all bubble data and OCR texts
-    bubble_data = []
-    texts_to_translate = []
-    first_bubble_image = None  # For font analysis
-    
-    for result in results:
-        # Handle both old format (6 items) and new format (7 items with is_dark_bubble)
-        if len(result) >= 7:
-            x1, y1, x2, y2, score, class_id, is_dark = result[:7]
-        else:
-            x1, y1, x2, y2, score, class_id = result[:6]
-            is_dark = 0
-        
-        detected_image = image[int(y1):int(y2), int(x1):int(x2)]
-        
-        # Save first bubble for font analysis (before processing)
-        if first_bubble_image is None:
-            first_bubble_image = detected_image.copy()
-        
-        # Fix: detected_image is already uint8, no need to multiply by 255
-        im = Image.fromarray(detected_image)
-        text = mocr(im)
-        
-        # Use auto detection or forced dark based on detection flag
-        detected_image, cont, bubble_is_dark, detected_color = process_bubble_auto(detected_image, force_dark=(is_dark == 1))
-        
-        bubble_data.append({
-            'detected_image': detected_image,
-            'contour': cont,
-            'coords': (int(x1), int(y1), int(x2), int(y2)),
-            'is_dark': bubble_is_dark,
-            'fill_color': detected_color
-        })
-        texts_to_translate.append(text)
-    
-    # Phase 2: Batch translate
-    if selected_translator == "gemini" and len(texts_to_translate) > 1:
-        # Use batch translation for Gemini
-        try:
-            if manga_translator._gemini_translator is None:
-                from translator.gemini_translator import GeminiTranslator
-                api_key = getattr(manga_translator, '_gemini_api_key', None)
-                if not api_key:
-                    raise ValueError("Gemini API key not provided")
-                custom_prompt = getattr(manga_translator, '_gemini_custom_prompt', None)
-                manga_translator._gemini_translator = GeminiTranslator(
-                    api_key=api_key, 
-                    custom_prompt=custom_prompt
-                )
-            
-            translated_texts = manga_translator._gemini_translator.translate_batch(
-                texts_to_translate,
-                source=manga_translator.source,
-                target=manga_translator.target
-            )
-        except Exception as e:
-            print(f"Batch translation failed, falling back to single: {e}")
-            translated_texts = [manga_translator.translate(t, method=selected_translator) for t in texts_to_translate]
-    
-    elif selected_translator == "copilot" and len(texts_to_translate) > 1:
-        # Use batch translation for Local LLM (Ollama, LM Studio, etc.)
-        try:
-            if not hasattr(manga_translator, '_local_llm_translator') or manga_translator._local_llm_translator is None:
-                from translator.local_llm_translator import LocalLLMTranslator
-                copilot_server = getattr(manga_translator, '_copilot_server', 'http://localhost:8080')
-                copilot_model = getattr(manga_translator, '_copilot_model', 'gpt-4o')
-                copilot_custom_prompt = getattr(manga_translator, '_copilot_custom_prompt', None)
-                manga_translator._local_llm_translator = LocalLLMTranslator(
-                    server_url=copilot_server,
-                    model=copilot_model,
-                    custom_prompt=copilot_custom_prompt
-                )
-                print(f"Local LLM translator initialized: {copilot_server} / {copilot_model}")
-            
-            translated_texts = manga_translator._local_llm_translator.translate_batch(
-                texts_to_translate,
-                source=manga_translator.source,
-                target=manga_translator.target
-            )
-        except Exception as e:
-            print(f"Copilot batch translation failed: {e}")
-            translated_texts = texts_to_translate  # Return original on error
-    
-    else:
-        # Single translation for other translators
-        # Optimized: Use batch translation if available (e.g. for NLLB)
-        translated_texts = manga_translator.translate_batch(texts_to_translate, method=selected_translator)
-    
-    # Phase 3: Add translated text to bubbles
-    # Determine correct font path based on font name
-    font_path = get_font_path(selected_font)
-    for data, translated_text in zip(bubble_data, translated_texts):
-        # Use white text for dark bubbles, black text for light bubbles
-        text_color = (255, 255, 255) if data.get('is_dark', False) else (0, 0, 0)
-        add_text(data['detected_image'], translated_text, font_path, data['contour'], text_color)
-    
-    return image
-
-
-def get_font_path(font_name: str) -> str:
-    """Get the correct font file path based on font name."""
-    # Handle legacy fonts with 'i' suffix
-    if font_name in ["animeace_", "arial", "mangat"]:
-        return f"fonts/{font_name}i.ttf"
-    # Yuki-* fonts use exact name
-    elif font_name.startswith("Yuki-") or font_name.startswith("yuki-"):
-        return f"fonts/{font_name}.ttf"
-    else:
-        return f"fonts/{font_name}.ttf"
-
-
-def process_images_with_batch(images_data, manga_translator, mocr, selected_font, translator_type, batch_size=10, use_context_memory=True, enable_black_bubble=True):
-    """
-    Process multiple images with multi-page batching for Copilot or Gemini.
-    Collects all texts first, batch translates, then applies translations.
-    
-    Args:
-        images_data: List of dicts with 'image', 'name' keys
-        manga_translator: MangaTranslator instance with translator
-        mocr: OCR engine
-        selected_font: Font to use
-        translator_type: 'copilot' or 'gemini'
-        batch_size: Number of pages per API call
-        use_context_memory: Whether to include context from all pages for better translation
-        
-    Returns:
-        List of processed images with translations applied
-    """
-    import time
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-    def emit_progress(phase, current, total, message):
-        """Emit progress update via WebSocket."""
-        try:
-            socketio.emit('progress', {
-                'phase': phase,
-                'current': current,
-                'total': total,
-                'message': message,
-                'percent': int((current / max(total, 1)) * 100)
-            })
-        except Exception as e:
-            pass  # Silently fail if socket not connected
-    
-    total_images = len(images_data)
-    log(f"Processing {total_images} images... Context Memory: {'ON' if use_context_memory else 'OFF'}")
-    
-    start_time = time.time()
-    
-    # Check if using Chrome Lens OCR (has batch support)
-    use_batch_ocr = hasattr(mocr, 'process_batch')
-    
-    # Phase 1a: Detect bubbles and collect all bubble images
-    print("\n[Phase 1] Detecting bubbles...")
-    emit_progress('detection', 0, total_images, 'Bắt đầu phát hiện speech bubbles...')
-    all_pages_data = {}  # {page_name: {'image': img, 'bubbles': [...], 'bubble_images': [...]}}
-    all_bubble_images = []  # Flat list for batch OCR
-    bubble_mapping = []  # [(page_name, bubble_idx), ...] to map back
-    
-    for idx, img_data in enumerate(images_data):
-        image = img_data['image']
-        name = img_data['name']
-        
-        emit_progress('detection', idx + 1, total_images, f'Phát hiện bubbles: {name}')
-        print(f"  [{idx+1}/{total_images}] {name}", end="", flush=True)
-        
-        results = detect_bubbles(MODEL_PATH, image, enable_black_bubble)
-        if not results:
-            all_pages_data[name] = {'image': image, 'bubbles': [], 'texts': []}
-            print(f" - 0 bubbles")
-            continue
-        
-        print(f" - {len(results)} bubbles")
-        
-        bubble_data = []
-        
-        for bubble_idx, result in enumerate(results):
-            # Handle both old format (6 items) and new format (7 items with is_dark_bubble)
-            if len(result) >= 7:
-                x1, y1, x2, y2, score, class_id, is_dark = result[:7]
-            else:
-                x1, y1, x2, y2, score, class_id = result[:6]
-                is_dark = 0
-            
-            detected_image = image[int(y1):int(y2), int(x1):int(x2)]
-            
-            # IMPORTANT: Add to OCR queue BEFORE processing (which fills white/black)
-            all_bubble_images.append(Image.fromarray(detected_image.copy()))
-            bubble_mapping.append((name, bubble_idx))
-            
-            # Process bubble (fill with auto-detected or specified color based on type)
-            processed_image, cont, bubble_is_dark, detected_color = process_bubble_auto(detected_image, force_dark=(is_dark == 1))
-            
-            bubble_data.append({
-                'detected_image': processed_image,
-                'contour': cont,
-                'coords': (int(x1), int(y1), int(x2), int(y2)),
-                'is_dark': bubble_is_dark,
-                'fill_color': detected_color
-            })
-        
-        all_pages_data[name] = {
-            'image': image,
-            'bubbles': bubble_data,
-            'texts': []  # Will fill after OCR
-        }
-    
-    detection_time = time.time() - start_time
-    print(f"✓ Bubble detection completed in {detection_time:.1f}s ({len(all_bubble_images)} total bubbles)")
-    emit_progress('detection', total_images, total_images, f'Phát hiện xong {len(all_bubble_images)} bubbles')
-    
-    # Phase 1b: Batch OCR all bubbles at once
-    if all_bubble_images:
-        ocr_start = time.time()
-        emit_progress('ocr', 0, 1, f'Đang OCR {len(all_bubble_images)} bubbles...')
-        print(f"\n[Phase 2] OCR processing {len(all_bubble_images)} bubbles...", end=" ", flush=True)
-        
-        if use_batch_ocr:
-            # Use concurrent batch OCR (Chrome Lens)
-            all_texts = mocr.process_batch(all_bubble_images)
-        else:
-            # Sequential OCR (MangaOcr or others)
-            all_texts = [mocr(img) for img in all_bubble_images]
-        
-        # Map texts back to pages
-        for (page_name, bubble_idx), text in zip(bubble_mapping, all_texts):
-            all_pages_data[page_name]['texts'].append(text)
-        
-        ocr_time = time.time() - ocr_start
-        print(f"({ocr_time:.1f}s)")
-        print(f"✓ OCR completed in {ocr_time:.1f}s ({len(all_bubble_images)/ocr_time:.1f} bubbles/sec)")
-        emit_progress('ocr', 1, 1, f'OCR hoàn tất ({len(all_bubble_images)} bubbles)')
-    
-    # Phase 3: Batch translate all pages together
-    emit_progress('translation', 0, 1, 'Đang dịch...')
-    pages_texts = {name: data['texts'] for name, data in all_pages_data.items() if data['texts']}
-    all_translations = {}
-    
-    if pages_texts:
-        # Get the translator based on type
-        if translator_type == "copilot" and hasattr(manga_translator, '_local_llm_translator') and manga_translator._local_llm_translator:
-            translator = manga_translator._local_llm_translator
-            translator_name = "Local LLM"
-        elif translator_type == "gemini" and hasattr(manga_translator, '_gemini_translator') and manga_translator._gemini_translator:
-            translator = manga_translator._gemini_translator
-            translator_name = "Gemini"
-        else:
-            translator = None
-            translator_name = "Unknown"
-        
-        if translator:
-            print(f"{translator_name} batch translating {len(pages_texts)} pages in chunks of {batch_size}...")
-            
-            # Initialize context memory if enabled
-            context_memory = None
-            if use_context_memory:
-                context_memory = ContextMemory()
-                print(f"  Context Memory enabled - tracking terms and story context")
-            
-            # Process in batches
-            page_names = list(pages_texts.keys())
-            
-            for i in range(0, len(page_names), batch_size):
-                batch_names = page_names[i:i + batch_size]
-                batch_texts = {name: pages_texts[name] for name in batch_names}
-                
-                print(f"  Translating batch {i//batch_size + 1}: pages {i+1}-{min(i+batch_size, len(page_names))}")
-                
-                try:
-                    translated = translator.translate_pages_batch(
-                        batch_texts,
-                        source=manga_translator.source,
-                        target=manga_translator.target,
-                        context_memory=context_memory
-                    )
-                    all_translations.update(translated)
-                    
-                    # Update context memory with this batch's translations
-                    if context_memory:
-                        context_memory.update_from_translation(batch_texts, translated)
-                        stats = context_memory.get_stats()
-                        print(f"    Context updated: {stats['tracked_words']} terms tracked, {stats['recent_pages']} pages in memory")
-                        
-                except Exception as e:
-                    print(f"  Batch failed: {e}, falling back to individual translation")
-                    for name, texts in batch_texts.items():
-                        try:
-                            all_translations[name] = translator.translate_batch(
-                                texts, manga_translator.source, manga_translator.target
-                            )
-                        except:
-                            all_translations[name] = texts  # Return original on error
-    
-    translation_time = time.time() - start_time - detection_time
-    print(f"✓ Translation completed in {translation_time:.1f}s")
-    emit_progress('translation', 1, 1, 'Dịch hoàn tất')
-    
-    # Phase 4: Apply translations and render text
-    emit_progress('rendering', 0, total_images, 'Đang render text vào ảnh...')
-    render_start = time.time()
-    processed_results = []
-    font_path = get_font_path(selected_font)
-    
-    print(f"\n[Phase 4] Rendering text...")
-    
-    render_idx = 0
-    for name, data in all_pages_data.items():
-        render_idx += 1
-        emit_progress('rendering', render_idx, total_images, f'Render text: {name}')
-        
-        image = data['image']
-        bubbles = data['bubbles']
-        translated_texts = all_translations.get(name, data['texts'])  # Fallback to original
-        
-        # Apply text to bubbles on the ORIGINAL image
-        for bubble, text in zip(bubbles, translated_texts):
-            x1, y1, x2, y2 = bubble['coords']
-            # Get the region in the original image (this is a view, modifications affect original)
-            bubble_region = image[y1:y2, x1:x2]
-            # Use white text for dark bubbles, black text for light bubbles
-            text_color = (255, 255, 255) if bubble.get('is_dark', False) else (0, 0, 0)
-            # Add translated text
-            add_text(bubble_region, text, font_path, bubble['contour'], text_color)
-        
-        processed_results.append({
-            'image': image,
-            'name': name
-        })
-    
-    render_time = time.time() - render_start
-    total_time = time.time() - start_time
-    
-    print(f"✓ Text rendering completed in {render_time:.1f}s")
-    print(f"{'='*50}")
-    print(f"✓ TOTAL: {total_images} images processed in {total_time:.1f}s ({total_time/total_images:.1f}s/image)")
-    print(f"{'='*50}\n")
-    
-    emit_progress('done', total_images, total_images, f'Hoàn tất! {total_images} ảnh trong {total_time:.1f}s')
-    
-    return processed_results
-
-
 @app.route("/translate", methods=["POST"])
 def upload_file():
-    # Get translator selection
-    translator_map = {
-        "Opus-mt model": "hf",
-        "NLLB": "nllb",
-        "Gemini": "gemini",
-        "Local LLM": "copilot"  # copilot is internal name for OpenAI-compatible endpoints
-    }
-    selected_translator = translator_map.get(
-        request.form["selected_translator"],
-        request.form["selected_translator"].lower()
-    )
+    manual_correction = request.form.get("manual_correction", "").strip() == "on"
     
-    # Get Local LLM settings if selected (Ollama, LM Studio, etc.)
+    translator_map = {
+        "Local LLM": "copilot",
+        "Copilot": "copilot"
+    }
+    selected_translator_raw = request.form["selected_translator"]
+    selected_translator = translator_map.get(selected_translator_raw, selected_translator_raw.lower())
+    
     copilot_server = request.form.get("copilot_server", "http://localhost:8080")
     copilot_model = request.form.get("copilot_model_input", "gpt-4o")
+    gemini_model = request.form.get("gemini_model_input", DEFAULT_GEMINI_MODEL).strip()
+    gemini_api_keys = parse_gemini_api_keys(request.form.get("gemini_api_key", ""))
+    if selected_translator == "gemini" and not gemini_api_keys:
+        return render_template("index.html", error="Vui lòng nhập ít nhất 1 Gemini API Key.")
+    if selected_translator == "gemini" and not gemini_model:
+        return render_template("index.html", error="Vui lòng nhập tên model Gemini.")
     
-    # Get Gemini API key from form
-    gemini_api_key = request.form.get("gemini_api_key", "").strip()
-    
-    # Get context memory setting (checkbox - "on" if checked, None if not)
-    use_context_memory = request.form.get("context_memory") == "on"
-
-    # Get black bubble detection setting (checkbox - "on" if checked, None if not)
-    enable_black_bubble = request.form.get("detect_black_bubbles") == "on"
-
-    # Get split long images setting (checkbox - "on" if checked, None if not)
-    split_long_images = request.form.get("split_long_images") == "on"
-
-    # Get font selection
     selected_font_raw = request.form["selected_font"]
     selected_font = selected_font_raw.lower()
-    
-    # Handle special font name mappings
     if selected_font == "auto (match original)":
-        selected_font = "auto"
+        selected_font = "animeace_"
     elif selected_font == "animeace":
         selected_font = "animeace_"
     elif selected_font_raw.startswith("Yuki-"):
-        # Keep original case for Yuki fonts
         selected_font = selected_font_raw
-
-    # Get OCR engine
-    selected_ocr = request.form.get("selected_ocr", "chrome-lens").lower()
     
-    # Get source language
     source_lang_map = {
         "japanese (manga)": "ja",
         "chinese (manhua)": "zh",
@@ -517,306 +673,357 @@ def upload_file():
     selected_source = request.form.get("selected_source_lang", "Japanese (Manga)").lower()
     source_lang = source_lang_map.get(selected_source, "ja")
     
-    # Get target language
     target_lang_map = {
-        "english": "en",
-        "vietnamese": "vi", 
-        "chinese": "zh",
-        "korean": "ko",
-        "thai": "th",
-        "indonesian": "id",
-        "french": "fr",
-        "german": "de",
-        "spanish": "es",
-        "russian": "ru"
+        "english": "en", "vietnamese": "vi", "chinese": "zh", "korean": "ko",
+        "thai": "th", "indonesian": "id", "french": "fr", "german": "de",
+        "spanish": "es", "russian": "ru"
     }
     selected_language = request.form.get("selected_language", "Vietnamese").lower()
     target_lang = target_lang_map.get(selected_language, "vi")
     
-    # Get translation style/custom prompt
     style_map = {
-        "default": "",
-        "casual (thân mật)": "casual",
-        "formal (trang trọng)": "formal",
+        "default": "", "casual (thân mật)": "casual", "formal (trang trọng)": "formal",
         "keep honorifics (-san, senpai...)": "keep_honorifics",
-        "web novel style": "web_novel",
-        "action (ngắn gọn)": "action",
-        "literal (sát nghĩa)": "literal",
-        "custom...": ""
+        "web novel style": "web_novel", "action (ngắn gọn)": "action",
+        "literal (sát nghĩa)": "literal", "custom...": ""
     }
     selected_style = request.form.get("selected_style", "Default").lower()
     style = style_map.get(selected_style, "")
-    
-    # Get custom prompt if provided
     custom_prompt = request.form.get("custom_prompt", "").strip()
     if custom_prompt:
-        style = custom_prompt  # Override style with custom prompt
-
-    # Get multiple files
+        style = custom_prompt
+    
     files = request.files.getlist("files")
-    
     if not files or files[0].filename == '':
-        return redirect("/")
+        return render_template("index.html", error="Vui lòng chọn ít nhất 1 ảnh để dịch.")
     
-    # Initialize translator and OCR once for all images
-    manga_translator = MangaTranslator(source=source_lang, target=target_lang)
+    ocr_engine = ChromeLensOCR(ocr_language=source_lang)
     
-    # Set custom prompt for Gemini
-    if selected_translator == "gemini" and style:
-        manga_translator._gemini_custom_prompt = style
-    
-    # Set custom prompt for Local LLM
-    if selected_translator == "copilot" and style:
-        manga_translator._copilot_custom_prompt = style
-    
-    # Set Gemini API key
-    if selected_translator == "gemini" and gemini_api_key:
-        manga_translator._gemini_api_key = gemini_api_key
-        print(f"Using Gemini API with provided key")
-    
-    # Set Copilot settings
-    if selected_translator == "copilot":
-        manga_translator._copilot_server = copilot_server
-        manga_translator._copilot_model = copilot_model
-        print(f"Using Local LLM: {copilot_server} / model: {copilot_model}")
-    
-    if selected_ocr == "chrome-lens":
-        if _OCR_CACHE["chrome_lens"] is None:
-            _OCR_CACHE["chrome_lens"] = ChromeLensOCR()
-        mocr = _OCR_CACHE["chrome_lens"]
-    else:
-        if _OCR_CACHE["manga_ocr"] is None:
-            _OCR_CACHE["manga_ocr"] = MangaOcr()
-        mocr = _OCR_CACHE["manga_ocr"]
-    
-    # Initialize font analyzer for auto font matching
-    font_analyzer = None
-    if selected_font == "auto":
-        try:
-            from font_analyzer import FontAnalyzer
-            # Use same API key as Gemini translator
-            api_key = gemini_api_key or os.environ.get("GEMINI_API_KEY")
-            if not api_key:
-                print("Warning: No Gemini API key provided for font analysis")
-            font_analyzer = FontAnalyzer(api_key=api_key)
-            print("Font analyzer initialized for auto font matching")
-        except Exception as e:
-            print(f"Failed to initialize font analyzer: {e}")
-            selected_font = "animeace_"  # Fallback to default
-    
-    # Process all images
-    processed_images = []
-    auto_font_determined = False  # Flag to analyze font only once
-    
-    # For Local LLM and Gemini: Use multi-page batch processing
-    if selected_translator in ["copilot", "gemini"]:
-        # First, read all images into memory
-        all_images = []
-        for file in files:
-            if file and file.filename:
-                try:
-                    file_stream = file.stream
-                    file_bytes = np.frombuffer(file_stream.read(), dtype=np.uint8)
-                    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-                    
-                    if image is None:
-                        continue
-                    
-                    name = os.path.splitext(file.filename)[0]
-                    all_images.append({'image': image, 'name': name})
-                except Exception as e:
-                    print(f"Error reading {file.filename}: {e}")
-        
-        if not all_images:
-            return redirect("/")
-        
-        # Auto font: analyze first image
-        if selected_font == "auto" and font_analyzer is not None:
-            try:
-                results = detect_bubbles(MODEL_PATH, all_images[0]['image'], enable_black_bubble)
-                if results:
-                    x1, y1, x2, y2, _, _ = results[0]
-                    first_bubble = all_images[0]['image'][int(y1):int(y2), int(x1):int(x2)]
-                    selected_font = font_analyzer.analyze_and_match(first_bubble)
-                    print(f"Auto font matched: {selected_font}")
-                else:
-                    selected_font = "animeace_"
-            except Exception as e:
-                print(f"Font analysis failed: {e}")
-                selected_font = "animeace_"
-        
-        # Initialize translator based on type
-        if selected_translator == "copilot":
-            if not hasattr(manga_translator, '_local_llm_translator') or manga_translator._local_llm_translator is None:
-                from translator.local_llm_translator import LocalLLMTranslator
-                # Get custom prompt for Local LLM
-                copilot_custom_prompt = style if style else None
-                manga_translator._local_llm_translator = LocalLLMTranslator(
-                    server_url=copilot_server,
-                    model=copilot_model,
-                    custom_prompt=copilot_custom_prompt
-                )
-                print(f"Local LLM translator initialized: {copilot_server} / {copilot_model} (style: {style or 'default'})")
-        
-        elif selected_translator == "gemini":
-            if not hasattr(manga_translator, '_gemini_translator') or manga_translator._gemini_translator is None:
-                from translator.gemini_translator import GeminiTranslator
-                api_key = gemini_api_key
-                if not api_key:
-                    raise ValueError("Gemini API key required. Please enter it in the web form.")
-                custom_prompt = getattr(manga_translator, '_gemini_custom_prompt', None)
-                manga_translator._gemini_translator = GeminiTranslator(
-                    api_key=api_key,
-                    custom_prompt=custom_prompt
-                )
-                print("Gemini translator initialized for multi-page batching")
-        
-        # Process with multi-page batching (10 pages per API call)
-        processed_results = process_images_with_batch(
-            all_images, manga_translator, mocr, selected_font, 
-            translator_type=selected_translator, batch_size=10,
-            use_context_memory=use_context_memory,
-            enable_black_bubble=enable_black_bubble
+    all_images = []
+    unsupported_files = [
+        file.filename for file in files
+        if file and file.filename and not is_allowed_image_file(file.filename)
+    ]
+    if unsupported_files:
+        return render_template(
+            "index.html",
+            error=f"Chỉ hỗ trợ ảnh {SUPPORTED_IMAGE_FORMATS_LABEL}.",
         )
-        
-        # Encode results to base64 (with optional splitting)
-        for result in processed_results:
+
+    for file in files:
+        if file and file.filename:
             try:
-                image = result['image']
-                base_name = result['name']
-                
-                # Split long images if enabled
-                if split_long_images:
-                    chunks = split_long_image(image)
-                else:
-                    chunks = [image]
-                
-                # Encode each chunk
-                for i, chunk in enumerate(chunks):
-                    _, buffer = cv2.imencode(".jpg", chunk, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                    encoded_image = base64.b64encode(buffer.tobytes()).decode("utf-8")
-                    
-                    # Add suffix if split into multiple chunks
-                    if len(chunks) > 1:
-                        chunk_name = f"{base_name}_part{i+1}"
-                    else:
-                        chunk_name = base_name
-                    
-                    processed_images.append({
-                        "name": chunk_name,
-                        "data": encoded_image
-                    })
-            except Exception as e:
-                print(f"Error encoding {result['name']}: {e}")
-    
-    else:
-        # For other translators: Use per-image processing (original flow)
-        for file in files:
-            if file and file.filename:
-                try:
-                    # Read image
-                    file_stream = file.stream
-                    file_bytes = np.frombuffer(file_stream.read(), dtype=np.uint8)
-                    image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-                    
-                    if image is None:
-                        continue
-                    
-                    # Auto font: analyze FIRST image only
-                    if selected_font == "auto" and font_analyzer is not None and not auto_font_determined:
-                        try:
-                            results = detect_bubbles(MODEL_PATH, image, enable_black_bubble)
-                            if results:
-                                x1, y1, x2, y2, _, _ = results[0]
-                                first_bubble = image[int(y1):int(y2), int(x1):int(x2)]
-                                selected_font = font_analyzer.analyze_and_match(first_bubble)
-                                print(f"Auto font matched (once for all images): {selected_font}")
-                            else:
-                                selected_font = "animeace_"
-                        except Exception as e:
-                            print(f"Font analysis failed: {e}")
-                            selected_font = "animeace_"
-                        auto_font_determined = True
-                    
-                    # Get original filename
-                    name = os.path.splitext(file.filename)[0]
-                    
-                    # Process image
-                    processed_image = process_single_image(
-                        image, manga_translator, mocr, 
-                        selected_translator, selected_font, None,
-                        enable_black_bubble=enable_black_bubble
-                    )
-                    
-                    # Split long images if enabled
-                    if split_long_images:
-                        chunks = split_long_image(processed_image)
-                    else:
-                        chunks = [processed_image]
-                    
-                    # Encode each chunk to base64
-                    for i, chunk in enumerate(chunks):
-                        _, buffer = cv2.imencode(".jpg", chunk, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                        encoded_image = base64.b64encode(buffer.tobytes()).decode("utf-8")
-                        
-                        # Add suffix if split into multiple chunks
-                        if len(chunks) > 1:
-                            chunk_name = f"{name}_part{i+1}"
-                        else:
-                            chunk_name = name
-                        
-                        processed_images.append({
-                            "name": chunk_name,
-                            "data": encoded_image
-                        })
-                    
-                except Exception as e:
-                    print(f"Error processing {file.filename}: {e}")
+                file_stream = file.stream
+                file_bytes = np.frombuffer(file_stream.read(), dtype=np.uint8)
+                image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+                if image is None:
                     continue
+                name = clean_image_name(file.filename)
+                all_images.append({'image': image, 'name': name})
+            except Exception as e:
+                print(f"Error reading {file.filename}: {e}")
+    
+    if not all_images:
+        return render_template(
+            "index.html",
+            error=f"Không đọc được ảnh. Hãy thử file {SUPPORTED_IMAGE_FORMATS_LABEL} khác.",
+        )
+    
+    # Phase 1: OCR all images (batch concurrent)
+    print("\n[Phase 1] OCR full images with Chrome Lens...")
+    emit_progress('ocr', 0, len(all_images), 'Bắt đầu OCR toàn ảnh...')
+
+    # Use batch processing when multiple images
+    raw_images = [d['image'] for d in all_images]
+    names = [d['name'] for d in all_images]
+
+    if len(raw_images) > 1:
+        batch_results = ocr_engine.process_batch(raw_images)
+    else:
+        batch_results = [ocr_engine(raw_images[0])]
+
+    all_ocr_results = []
+    all_texts = []
+    text_index = 0
+
+    for idx, blocks in enumerate(batch_results):
+        name = names[idx]
+        image = raw_images[idx]
+        blocks, skipped_artifacts = filter_ocr_blocks(blocks, image, source_lang)
+        skip_msg = f", skipped {skipped_artifacts} artifact(s)" if skipped_artifacts else ""
+        print(f"  [{idx+1}/{len(all_images)}] OCR {name}: {len(blocks)} text blocks found{skip_msg}")
+
+        all_ocr_results.append((name, image, blocks))
+        all_texts.extend([b['text'] for b in blocks if b.get('text', '').strip()])
+
+        for block in blocks:
+            if block.get('text', '').strip():
+                block['_text_idx'] = text_index
+                text_index += 1
+    
+    ocr_blocks_count = sum(len(blocks) for _, _, blocks in all_ocr_results)
+    print(f"OK OCR completed: {ocr_blocks_count} text blocks across {len(all_images)} images")
+    emit_progress('ocr', len(all_images), len(all_images), f'OCR hoàn tất: {ocr_blocks_count} text blocks')
+    
+    # If manual correction is enabled, store session and redirect to correction page
+    if manual_correction:
+        cleanup_old_sessions()
+        session_id = str(uuid.uuid4())
+        session_data = {
+            'all_ocr_results': all_ocr_results,
+            'all_texts': all_texts,
+            'selected_translator': selected_translator,
+            'selected_font': selected_font,
+            'source_lang': source_lang,
+            'target_lang': target_lang,
+            'style': style,
+            'gemini_api_keys': gemini_api_keys,
+            'gemini_api_key': "\n".join(gemini_api_keys),
+            'gemini_model': gemini_model,
+            'copilot_server': copilot_server,
+            'copilot_model': copilot_model,
+            'translator_type': selected_translator,
+        }
+        
+        # Save to disk as JSON + JPEG (lightweight, no pickle)
+        _save_session(session_id, session_data)
+        
+        # Generate preview images for correction page
+        preview_images = build_preview_images(all_ocr_results, source_lang=source_lang)
+        
+        return render_template("correction.html", 
+                             session_id=session_id,
+                             images=preview_images,
+                             total_blocks=ocr_blocks_count)
+    
+    # Normal flow: continue to translate -> render
+    return _do_full_pipeline(all_images, all_ocr_results, all_texts,
+                           selected_translator, selected_font,
+                           source_lang, target_lang, style,
+                           gemini_api_keys, gemini_model, copilot_server, copilot_model)
+
+
+def _do_full_pipeline(all_images, all_ocr_results, all_texts,
+                      selected_translator, selected_font,
+                      source_lang, target_lang, style,
+                      gemini_api_keys, gemini_model, copilot_server, copilot_model,
+                      correction_session_id=None):
+    
+    translator_obj = MangaTranslator(source=source_lang, target=target_lang)
+    
+    if selected_translator == "gemini":
+        translator_obj._gemini_custom_prompt = style if style else None
+        translator_obj._gemini_api_keys = gemini_api_keys
+        translator_obj._gemini_model = gemini_model
+        from translator.gemini_translator import GeminiTranslator
+        translator_obj._gemini_translator = GeminiTranslator(
+            api_keys=gemini_api_keys,
+            custom_prompt=style if style else None,
+            model_name=gemini_model,
+        )
+        print(f"Gemini translator initialized with {len(gemini_api_keys)} key(s), model: {gemini_model}")
+    
+    elif selected_translator == "copilot":
+        translator_obj._copilot_server = copilot_server
+        translator_obj._copilot_model = copilot_model
+        translator_obj._copilot_custom_prompt = style if style else None
+        print(f"Local LLM: {copilot_server} / model: {copilot_model}")
+    
+    elif selected_translator == "google":
+        print(f"Using Google Translate")
+    
+    original_images_by_name = snapshot_original_images(all_ocr_results)
+
+    processed_results = translate_and_render(
+        all_ocr_results, translator_obj, selected_font,
+        translator_type=selected_translator,
+        source_lang=source_lang, target_lang=target_lang, style=style
+    )
+    warning = None
+    warning = getattr(translator_obj, "last_warning", None)
+    gemini_translator = getattr(translator_obj, "_gemini_translator", None)
+    if gemini_translator is not None:
+        warning = getattr(gemini_translator, "last_warning", None) or warning
+    
+    try:
+        processed_images = build_result_images(processed_results, original_images_by_name)
+    except Exception as e:
+        print(f"Error encoding result images: {e}")
+        processed_images = []
     
     if not processed_images:
         return redirect("/")
     
-    return render_template("translate.html", images=processed_images)
+    return render_template(
+        "translate.html",
+        images=processed_images,
+        warning=warning,
+        correction_session_id=correction_session_id,
+    )
+
+
+@app.route("/correction/<session_id>")
+def correction_page(session_id):
+    """Reload correction page from session data"""
+    session_data = load_session(session_id)
+    if session_data is None:
+        return redirect("/")
+    
+    all_ocr_results = session_data['all_ocr_results']
+    preview_images = build_preview_images(
+        all_ocr_results,
+        source_lang=session_data.get('source_lang', 'ja'),
+    )
+    
+    ocr_blocks_count = sum(len(blocks) for _, _, blocks in all_ocr_results)
+    return render_template("correction.html",
+                         session_id=session_id,
+                         images=preview_images,
+                         total_blocks=ocr_blocks_count)
+
+
+@app.route("/continue-translate", methods=["POST"])
+def continue_translate():
+    """Continue pipeline after manual correction"""
+    session_id = request.form.get("session_id", "")
+    modified_blocks_json = request.form.get("modified_blocks", "[]")
+    
+    session_data = load_session(session_id)
+    if session_data is None:
+        return redirect("/")
+    
+    # Parse modified blocks from frontend
+    # modified_blocks = [{"image_idx": 0, "blocks": [{"text": "...", "bbox": [...]}, ...]}, ...]
+    try:
+        modified_blocks = json.loads(modified_blocks_json)
+    except json.JSONDecodeError:
+        return redirect("/")
+    if isinstance(modified_blocks, dict):
+        modified_blocks = [modified_blocks]
+    if not isinstance(modified_blocks, list):
+        return redirect("/")
+    
+    # Rebuild all_ocr_results from modified blocks
+    all_ocr_results = session_data['all_ocr_results']
+    all_texts = []
+    text_index = 0
+    
+    new_ocr_results = []
+    for img_data in modified_blocks:
+        img_idx = img_data['image_idx']
+        name, original_image, _ = all_ocr_results[img_idx]
+        
+        blocks = []
+        for b in img_data['blocks']:
+            text = b.get('text', '').strip()
+            bbox = normalize_bbox_for_json(b.get('bbox', None),
+                                           image_shape=original_image.shape,
+                                           expand_ratio=0)
+            if bbox and len(bbox) == 4:
+                block = {'text': text, 'bbox': bbox, '_bbox_expanded': True}
+                if text:
+                    block['_text_idx'] = text_index
+                    text_index += 1
+                    all_texts.append(text)
+                blocks.append(block)
+        
+        new_ocr_results.append((name, original_image, blocks))
+    
+    # Build all_images list
+    all_images = [{'image': img, 'name': name} for name, img, _ in new_ocr_results]
+    
+    if not all_texts:
+        emit_progress('done', 0, 0, 'Không có text để dịch')
+        processed_results = [{'name': name, 'image': image} for name, image, _ in new_ocr_results]
+        original_images_by_name = {name: image for name, image, _ in new_ocr_results}
+        processed_images = build_result_images(processed_results, original_images_by_name)
+        return render_template(
+            "translate.html",
+            images=processed_images,
+            correction_session_id=session_id,
+        )
+    
+    return _do_full_pipeline(
+        all_images, new_ocr_results, all_texts,
+        session_data['selected_translator'], session_data['selected_font'],
+        session_data['source_lang'], session_data['target_lang'], session_data['style'],
+        session_data.get('gemini_api_keys') or parse_gemini_api_keys(session_data.get('gemini_api_key', '')),
+        session_data.get('gemini_model', DEFAULT_GEMINI_MODEL),
+        session_data['copilot_server'], session_data['copilot_model'],
+        correction_session_id=session_id,
+    )
+
+
+@app.route("/ocr-region", methods=["POST"])
+def ocr_region():
+    session_id = request.form.get("session_id", "")
+    try:
+        image_idx = int(request.form.get("image_idx", "0"))
+        x1 = int(request.form.get("x1", "0"))
+        y1 = int(request.form.get("y1", "0"))
+        x2 = int(request.form.get("x2", "0"))
+        y2 = int(request.form.get("y2", "0"))
+    except (TypeError, ValueError):
+        return {"text": ""}, 400
+
+    session_data = load_session(session_id)
+    if session_data is None:
+        return {"text": ""}, 404
+
+    all_ocr_results = session_data['all_ocr_results']
+    if image_idx < 0 or image_idx >= len(all_ocr_results):
+        return {"text": ""}, 400
+
+    _, original_image, _ = all_ocr_results[image_idx]
+    h, w = original_image.shape[:2]
+
+    # Pad the region slightly
+    pad = 4
+    cx1 = max(0, int(x1) - pad)
+    cy1 = max(0, int(y1) - pad)
+    cx2 = min(w, int(x2) + pad)
+    cy2 = min(h, int(y2) + pad)
+
+    if cx2 <= cx1 or cy2 <= cy1:
+        return {"text": ""}
+
+    cropped = original_image[cy1:cy2, cx1:cx2]
+
+    ocr_engine = ChromeLensOCR(ocr_language=session_data.get('source_lang', 'ja'))
+    blocks = ocr_engine(cropped)
+
+    text = " ".join(b.get("text", "").strip() for b in blocks if b.get("text", "").strip())
+    return {"text": text}
 
 
 @app.route("/download-zip", methods=["POST"])
 def download_zip():
-    """Create and download a ZIP file containing all translated images."""
     try:
         images_data = request.form.get("images_data", "[]")
         images = json.loads(images_data)
-        
         if not images:
             return redirect("/")
         
-        # Create ZIP file in memory
         zip_buffer = io.BytesIO()
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
             for i, img in enumerate(images):
                 name = img.get('name', f'image_{i+1}')
                 data = img.get('data', '')
-                
-                # Decode base64 to bytes
                 image_bytes = base64.b64decode(data)
-                
-                # Add to ZIP with proper filename
-                filename = f"{name}_translated.png"
+                # Images are JPEG-encoded by the pipeline; use a matching extension
+                filename = f"{name}_translated.jpg"
                 zip_file.writestr(filename, image_bytes)
         
         zip_buffer.seek(0)
-        
-        return send_file(
-            zip_buffer,
-            mimetype='application/zip',
-            as_attachment=True,
-            download_name='manga_translated.zip'
-        )
-    
+        return send_file(zip_buffer, mimetype='application/zip',
+                        as_attachment=True, download_name='manga_translated.zip')
     except Exception as e:
         print(f"Error creating ZIP: {e}")
         return redirect("/")
 
 
 if __name__ == "__main__":
-    socketio.run(app, debug=True)
+    debug = os.environ.get("FLASK_DEBUG", "0").lower() in {"1", "true", "yes", "on"}
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "5000"))
+    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)

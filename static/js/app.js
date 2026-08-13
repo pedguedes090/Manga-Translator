@@ -16,20 +16,17 @@ document.addEventListener("DOMContentLoaded", () => {
         selectedText.textContent = defaultOption.textContent;
         defaultOption.classList.add('selected');
 
-        // Toggle options display on select box click
         selectBox.addEventListener('click', () => {
             options.style.display = options.style.display === 'block' ? 'none' : 'block';
             selectBox.classList.toggle('open');
         });
 
-        // Update selected option and hide options on option click
         optionList.forEach(option => {
             option.addEventListener('click', () => {
                 selectedText.textContent = option.textContent;
                 optionList.forEach(opt => opt.classList.remove('selected'));
                 option.classList.add('selected');
 
-                // Show/hide custom prompt textarea
                 if (selectBox.id === 'style') {
                     const customWrapper = document.getElementById('custom-prompt-wrapper');
                     if (option.textContent.includes('Custom')) {
@@ -39,7 +36,6 @@ document.addEventListener("DOMContentLoaded", () => {
                     }
                 }
 
-                // Show/hide translator-specific settings
                 if (selectBox.id === 'translator') {
                     const copilotSettings = document.getElementById('copilot-settings');
                     const geminiSettings = document.getElementById('gemini-settings');
@@ -58,7 +54,6 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         });
 
-        // Hide options when clicking outside the select box
         window.addEventListener('click', e => {
             if (!wrapper.contains(e.target)) {
                 options.style.display = 'none';
@@ -66,7 +61,6 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         });
 
-        // Save dropdown selection to localStorage
         optionList.forEach(option => {
             option.addEventListener('click', () => {
                 if (selectBox.id) {
@@ -75,7 +69,6 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         });
 
-        // Restore saved selection on load
         if (selectBox.id) {
             const savedValue = localStorage.getItem('select_' + selectBox.id);
             if (savedValue) {
@@ -85,7 +78,6 @@ document.addEventListener("DOMContentLoaded", () => {
                         optionList.forEach(o => o.classList.remove('selected'));
                         opt.classList.add('selected');
 
-                        // Trigger visibility updates for special selects
                         if (selectBox.id === 'style' && savedValue.includes('Custom')) {
                             document.getElementById('custom-prompt-wrapper').style.display = 'block';
                         }
@@ -109,15 +101,27 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // Load saved Gemini API key from localStorage
+    // Load saved Gemini API keys from localStorage
     const geminiKeyInput = document.getElementById('gemini_api_key');
     if (geminiKeyInput) {
-        const savedKey = localStorage.getItem('gemini_api_key');
+        const savedKey = localStorage.getItem('gemini_api_keys') || localStorage.getItem('gemini_api_key');
         if (savedKey) {
             geminiKeyInput.value = savedKey;
         }
         geminiKeyInput.addEventListener('input', () => {
-            localStorage.setItem('gemini_api_key', geminiKeyInput.value);
+            localStorage.setItem('gemini_api_keys', geminiKeyInput.value);
+        });
+    }
+
+    // Load saved Gemini model from localStorage
+    const geminiModelInput = document.getElementById('gemini_model_input');
+    if (geminiModelInput) {
+        const savedModel = localStorage.getItem('gemini_model');
+        if (savedModel) {
+            geminiModelInput.value = savedModel;
+        }
+        geminiModelInput.addEventListener('input', () => {
+            localStorage.setItem('gemini_model', geminiModelInput.value);
         });
     }
 
@@ -156,29 +160,6 @@ document.addEventListener("DOMContentLoaded", () => {
             localStorage.setItem('custom_prompt', customPromptInput.value);
         });
     }
-
-    // Load saved checkbox states from localStorage
-    const contextMemoryCheckbox = document.getElementById('context_memory');
-    if (contextMemoryCheckbox) {
-        const saved = localStorage.getItem('context_memory');
-        if (saved !== null) {
-            contextMemoryCheckbox.checked = saved === 'true';
-        }
-        contextMemoryCheckbox.addEventListener('change', () => {
-            localStorage.setItem('context_memory', contextMemoryCheckbox.checked);
-        });
-    }
-
-    const blackBubblesCheckbox = document.getElementById('detect_black_bubbles');
-    if (blackBubblesCheckbox) {
-        const saved = localStorage.getItem('detect_black_bubbles');
-        if (saved !== null) {
-            blackBubblesCheckbox.checked = saved === 'true';
-        }
-        blackBubblesCheckbox.addEventListener('change', () => {
-            localStorage.setItem('detect_black_bubbles', blackBubblesCheckbox.checked);
-        });
-    }
 });
 
 
@@ -202,7 +183,6 @@ if (fileUpload) {
         } else {
             fileText.textContent = `📁 ${files.length} ảnh đã chọn`;
 
-            // Show file list preview
             fileList.innerHTML = '';
             for (let i = 0; i < Math.min(files.length, 5); i++) {
                 const fileItem = document.createElement('div');
@@ -221,12 +201,17 @@ if (fileUpload) {
     });
 }
 
-// Truncates file name if it exceeds the maximum length
 function truncateFileName(fileName, maxLength) {
     return fileName.length <= maxLength ? fileName : fileName.substr(0, maxLength - 3) + '...';
 }
 
-// Updates hidden input fields with selected options
+function parseGeminiKeys(rawValue) {
+    return (rawValue || '')
+        .split(/[\s,;]+/)
+        .map(key => key.trim())
+        .filter(Boolean);
+}
+
 function updateHiddenInputs() {
     const getSelectedText = (id) => {
         const el = document.querySelector(`#${id} .selected`);
@@ -238,19 +223,23 @@ function updateHiddenInputs() {
     document.getElementById("selected_translator").value = getSelectedText("translator");
     document.getElementById("selected_style").value = getSelectedText("style");
     document.getElementById("selected_font").value = getSelectedText("font");
-    document.getElementById("selected_ocr").value = getSelectedText("ocr");
 
-    // Validate Gemini API key if Gemini is selected
     const translator = getSelectedText("translator");
     if (translator === 'Gemini') {
-        const apiKey = document.getElementById('gemini_api_key').value;
-        if (!apiKey || apiKey.trim() === '') {
-            alert('Vui lòng nhập Gemini API Key!');
+        const apiKeys = parseGeminiKeys(document.getElementById('gemini_api_key').value);
+        if (apiKeys.length === 0) {
+            alert('Vui lòng nhập ít nhất 1 Gemini API Key!');
+            return false;
+        }
+
+        const modelInput = document.getElementById('gemini_model_input');
+        if (!modelInput.value.trim()) {
+            alert('Vui lòng nhập tên model Gemini!');
+            modelInput.focus();
             return false;
         }
     }
 
-    // Check if files are selected
     const files = document.getElementById('file-upload').files;
     if (files.length === 0) {
         alert('Vui lòng chọn ít nhất 1 ảnh!');

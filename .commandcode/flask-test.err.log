@@ -1,0 +1,189 @@
+F:\duancanhan\newbiew\app.py:37: EventletDeprecationWarning: 
+Eventlet is deprecated. It is currently being maintained in bugfix mode, and
+we strongly recommend against using it for new projects.
+
+If you are already using Eventlet, we recommend migrating to a different
+framework.  For more detail see
+https://eventlet.readthedocs.io/en/latest/asyncio/migration.html
+
+  import eventlet
+ * Restarting with stat
+F:\duancanhan\newbiew\app.py:37: EventletDeprecationWarning: 
+Eventlet is deprecated. It is currently being maintained in bugfix mode, and
+we strongly recommend against using it for new projects.
+
+If you are already using Eventlet, we recommend migrating to a different
+framework.  For more detail see
+https://eventlet.readthedocs.io/en/latest/asyncio/migration.html
+
+  import eventlet
+ * Debugger is active!
+ * Debugger PIN: 110-176-387
+(74840) wsgi starting up on http://127.0.0.1:5000
+(74840) accepted ('127.0.0.1', 61055)
+127.0.0.1 - - [08/Jun/2026 19:11:34] "GET /correction/codex-numpy-bbox-test HTTP/1.1" 200 445164 0.025505
+(74840) accepted ('127.0.0.1', 60356)
+(74840) accepted ('127.0.0.1', 50885)
+127.0.0.1 - - [08/Jun/2026 19:12:22] "GET /socket.io/?EIO=4&transport=polling&t=Pwd9VGI HTTP/1.1" 200 300 0.000507
+127.0.0.1 - - [08/Jun/2026 19:12:23] "POST /socket.io/?EIO=4&transport=polling&t=Pwd9VHL&sid=5G2Q7i1zKskYmAmxAAAA HTTP/1.1" 200 219 0.001000
+(74840) accepted ('127.0.0.1', 62994)
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /socket.io/?EIO=4&transport=polling&t=Pwd9VHM&sid=5G2Q7i1zKskYmAmxAAAA HTTP/1.1" 200 213 0.001019
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /socket.io/?EIO=4&transport=polling&t=Pwd9VHj&sid=5G2Q7i1zKskYmAmxAAAA HTTP/1.1" 200 181 0.000000
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET / HTTP/1.1" 200 13000 0.008111
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /socket.io/?EIO=4&transport=websocket&sid=5G2Q7i1zKskYmAmxAAAA HTTP/1.1" 200 0 0.742361
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /static/css/style.css HTTP/1.1" 304 208 0.071130
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /static/img/logo.png HTTP/1.1" 304 208 0.001003
+(74840) accepted ('127.0.0.1', 59283)
+(74840) accepted ('127.0.0.1', 53406)
+(74840) accepted ('127.0.0.1', 49913)
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /static/js/app.js HTTP/1.1" 304 204 0.002982
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /static/img/loading.gif HTTP/1.1" 304 213 0.002023
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /static/img/header.png HTTP/1.1" 304 210 0.002000
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /static/img/back.jpg HTTP/1.1" 304 210 0.002019
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /socket.io/?EIO=4&transport=polling&t=Pwd9VUq HTTP/1.1" 200 300 0.000000
+127.0.0.1 - - [08/Jun/2026 19:12:23] "POST /socket.io/?EIO=4&transport=polling&t=Pwd9VVK&sid=kKCBG7V-YOfhaeFtAAAC HTTP/1.1" 200 219 0.000504
+(74840) accepted ('127.0.0.1', 56544)
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /socket.io/?EIO=4&transport=polling&t=Pwd9VVL&sid=kKCBG7V-YOfhaeFtAAAC HTTP/1.1" 200 213 0.001018
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /socket.io/?EIO=4&transport=polling&t=Pwd9VVZ&sid=kKCBG7V-YOfhaeFtAAAC HTTP/1.1" 200 181 0.000000
+127.0.0.1 - - [08/Jun/2026 19:12:23] "GET /socket.io/?EIO=4&transport=polling&t=Pwd9VVn&sid=kKCBG7V-YOfhaeFtAAAC HTTP/1.1" 200 181 0.000000
+Traceback (most recent call last):
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 1514, in wsgi_app
+    response = self.handle_exception(e)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\duancanhan\newbiew\app.py", line 310, in upload_file
+    print(f"\u2713 OCR completed: {ocr_blocks_count} text blocks across {len(all_images)} images")
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u2713' in position 0: character maps to <undefined>
+127.0.0.1 - - [08/Jun/2026 19:12:31] "POST /translate HTTP/1.1" 500 16253 1.592194
+127.0.0.1 - - [08/Jun/2026 19:12:31] "GET /socket.io/?EIO=4&transport=websocket&sid=kKCBG7V-YOfhaeFtAAAC HTTP/1.1" 200 0 7.295500
+127.0.0.1 - - [08/Jun/2026 19:12:31] "GET /translate?__debugger__=yes&cmd=resource&f=style.css HTTP/1.1" 200 6312 0.014996
+127.0.0.1 - - [08/Jun/2026 19:12:31] "GET /translate?__debugger__=yes&cmd=resource&f=debugger.js HTTP/1.1" 200 10318 0.065027
+127.0.0.1 - - [08/Jun/2026 19:12:31] "GET /translate?__debugger__=yes&cmd=resource&f=console.png&s=yZFBzyCknJ0ZDTixc1jv HTTP/1.1" 200 729 0.007998
+127.0.0.1 - - [08/Jun/2026 19:12:31] "GET /translate?__debugger__=yes&cmd=resource&f=console.png HTTP/1.1" 200 729 0.000000
+(74840) accepted ('127.0.0.1', 56320)
+127.0.0.1 - - [08/Jun/2026 19:15:04] "GET / HTTP/1.1" 200 12976 0.001002
+ * Detected change in 'F:\\duancanhan\\newbiew\\app.py', reloading
+ * Restarting with stat
+F:\duancanhan\newbiew\app.py:43: EventletDeprecationWarning: 
+Eventlet is deprecated. It is currently being maintained in bugfix mode, and
+we strongly recommend against using it for new projects.
+
+If you are already using Eventlet, we recommend migrating to a different
+framework.  For more detail see
+https://eventlet.readthedocs.io/en/latest/asyncio/migration.html
+
+  import eventlet
+ * Debugger is active!
+ * Debugger PIN: 110-176-387
+(92508) wsgi starting up on http://127.0.0.1:5000
+ * Detected change in 'F:\\duancanhan\\newbiew\\app.py', reloading
+ * Restarting with stat
+F:\duancanhan\newbiew\app.py:43: EventletDeprecationWarning: 
+Eventlet is deprecated. It is currently being maintained in bugfix mode, and
+we strongly recommend against using it for new projects.
+
+If you are already using Eventlet, we recommend migrating to a different
+framework.  For more detail see
+https://eventlet.readthedocs.io/en/latest/asyncio/migration.html
+
+  import eventlet
+ * Debugger is active!
+ * Debugger PIN: 110-176-387
+(7536) wsgi starting up on http://127.0.0.1:5000
+(7536) accepted ('127.0.0.1', 65188)
+127.0.0.1 - - [08/Jun/2026 19:16:20] "POST /translate HTTP/1.1" 200 445136 2.040092
+(7536) accepted ('127.0.0.1', 50683)
+127.0.0.1 - - [08/Jun/2026 19:16:46] "GET /correction/177e4322-a6cf-46ae-a3bc-805fd9220054 HTTP/1.1" 200 445160 0.022902
+127.0.0.1 - - [08/Jun/2026 19:16:46] "GET /static/css/correction.css HTTP/1.1" 304 213 0.032038
+(7536) accepted ('127.0.0.1', 54118)
+127.0.0.1 - - [08/Jun/2026 19:16:46] "GET /static/js/correction.js HTTP/1.1" 304 213 0.001000
+127.0.0.1 - - [08/Jun/2026 19:17:11] "POST /ocr-region HTTP/1.1" 200 149 0.901133
+(7536) accepted ('127.0.0.1', 61660)
+Traceback (most recent call last):
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 1514, in wsgi_app
+    response = self.handle_exception(e)
+               ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 1511, in wsgi_app
+    response = self.full_dispatch_request()
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 919, in full_dispatch_request
+    rv = self.handle_user_exception(e)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 917, in full_dispatch_request
+    rv = self.dispatch_request()
+         ^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dun\AppData\Local\Programs\Python\Python311\Lib\site-packages\flask\app.py", line 902, in dispatch_request
+    return self.ensure_sync(self.view_functions[rule.endpoint])(**view_args)  # type: ignore[no-any-return]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "F:\duancanhan\newbiew\app.py", line 451, in continue_translate
+    img_idx = img_data['image_idx']
+              ^^^^^^^^^^^^^^^^^^^^^
+TypeError: string indices must be integers, not 'str'
+127.0.0.1 - - [08/Jun/2026 19:18:28] "POST /continue-translate HTTP/1.1" 500 13536 0.021981
+ * Detected change in 'F:\\duancanhan\\newbiew\\app.py', reloading
+ * Restarting with stat
+F:\duancanhan\newbiew\app.py:43: EventletDeprecationWarning: 
+Eventlet is deprecated. It is currently being maintained in bugfix mode, and
+we strongly recommend against using it for new projects.
+
+If you are already using Eventlet, we recommend migrating to a different
+framework.  For more detail see
+https://eventlet.readthedocs.io/en/latest/asyncio/migration.html
+
+  import eventlet
+ * Debugger is active!
+ * Debugger PIN: 110-176-387
+(64252) wsgi starting up on http://127.0.0.1:5000
+(64252) accepted ('127.0.0.1', 62593)
+127.0.0.1 - - [08/Jun/2026 19:19:18] "POST /continue-translate HTTP/1.1" 200 1066942 0.407782
+(64252) accepted ('127.0.0.1', 54123)
+127.0.0.1 - - [08/Jun/2026 19:19:33] "POST /continue-translate HTTP/1.1" 200 1085854 0.018278
+127.0.0.1 - - [08/Jun/2026 19:19:33] "GET /static/css/style.css HTTP/1.1" 200 7671 0.031019
+(64252) accepted ('127.0.0.1', 50698)
+127.0.0.1 - - [08/Jun/2026 19:19:33] "GET /static/img/header.png HTTP/1.1" 200 86495 0.000999
+127.0.0.1 - - [08/Jun/2026 19:19:33] "GET /static/img/back.jpg HTTP/1.1" 200 1374464 0.010388
+(64252) accepted ('127.0.0.1', 56195)
+(64252) accepted ('127.0.0.1', 51701)
+127.0.0.1 - - [08/Jun/2026 19:22:18] "GET / HTTP/1.1" 200 13000 0.005999
+127.0.0.1 - - [08/Jun/2026 19:22:18] "GET /static/css/style.css HTTP/1.1" 304 208 0.004000
+(64252) accepted ('127.0.0.1', 55038)
+127.0.0.1 - - [08/Jun/2026 19:22:18] "GET /static/img/logo.png HTTP/1.1" 304 208 0.002000
+127.0.0.1 - - [08/Jun/2026 19:22:18] "GET /static/img/loading.gif HTTP/1.1" 304 213 0.002023
+127.0.0.1 - - [08/Jun/2026 19:22:18] "GET /static/js/app.js HTTP/1.1" 304 204 0.001002
+127.0.0.1 - - [08/Jun/2026 19:22:18] "GET /static/img/back.jpg HTTP/1.1" 304 210 0.001996
+127.0.0.1 - - [08/Jun/2026 19:22:18] "GET /static/img/header.png HTTP/1.1" 304 210 0.001001
+127.0.0.1 - - [08/Jun/2026 19:22:18] "GET /socket.io/?EIO=4&transport=polling&t=PwdBmnk HTTP/1.1" 200 300 0.000000
+127.0.0.1 - - [08/Jun/2026 19:22:19] "POST /socket.io/?EIO=4&transport=polling&t=PwdBmo5&sid=gVy7bFKrePl4npQrAAAA HTTP/1.1" 200 219 0.001000
+(64252) accepted ('127.0.0.1', 63614)
+127.0.0.1 - - [08/Jun/2026 19:22:19] "GET /socket.io/?EIO=4&transport=polling&t=PwdBmo6&sid=gVy7bFKrePl4npQrAAAA HTTP/1.1" 200 213 0.001000
+127.0.0.1 - - [08/Jun/2026 19:22:19] "GET /socket.io/?EIO=4&transport=polling&t=PwdBmsU&sid=gVy7bFKrePl4npQrAAAA HTTP/1.1" 200 181 0.000000
+127.0.0.1 - - [08/Jun/2026 19:22:24] "POST /translate HTTP/1.1" 200 299472 1.615501
+127.0.0.1 - - [08/Jun/2026 19:22:24] "GET /socket.io/?EIO=4&transport=websocket&sid=gVy7bFKrePl4npQrAAAA HTTP/1.1" 200 0 5.920335
+127.0.0.1 - - [08/Jun/2026 19:22:24] "GET /static/css/correction.css HTTP/1.1" 304 213 0.003999
+127.0.0.1 - - [08/Jun/2026 19:22:25] "GET /static/js/correction.js HTTP/1.1" 200 24097 0.001995
+127.0.0.1 - - [08/Jun/2026 19:22:35] "POST /ocr-region HTTP/1.1" 200 149 1.292793
+127.0.0.1 - - [08/Jun/2026 19:22:40] "POST /ocr-region HTTP/1.1" 200 149 1.393816
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET / HTTP/1.1" 200 13000 0.002999
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET /static/css/style.css HTTP/1.1" 304 208 0.003000
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET /static/img/loading.gif HTTP/1.1" 304 213 0.002050
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET /static/img/logo.png HTTP/1.1" 304 208 0.002099
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET /static/js/app.js HTTP/1.1" 304 204 0.001999
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET /socket.io/?EIO=4&transport=polling&t=PwdBv2i HTTP/1.1" 200 300 0.003001
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET /static/img/header.png HTTP/1.1" 304 210 0.002002
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET /static/img/back.jpg HTTP/1.1" 304 210 0.001021
+127.0.0.1 - - [08/Jun/2026 19:22:52] "POST /socket.io/?EIO=4&transport=polling&t=PwdBv4p&sid=IHJVTuiOeqSbJAiPAAAC HTTP/1.1" 200 219 0.001505
+127.0.0.1 - - [08/Jun/2026 19:22:52] "GET /socket.io/?EIO=4&transport=polling&t=PwdBv4w&sid=IHJVTuiOeqSbJAiPAAAC HTTP/1.1" 200 213 0.000000

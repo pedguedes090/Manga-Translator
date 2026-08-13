@@ -1,49 +1,157 @@
 """
 Gemini Translator with Batch Processing
-Uses Gemini 2.5 Flash-Lite for cost-effective translation
+Uses Gemini 3.1 Flash-Lite via the new google-genai SDK
 Supports multiple source languages and custom prompts
 """
-import google.generativeai as genai
 import json
 import os
+import re
 import time
-from typing import List, Dict, Optional, TYPE_CHECKING
+from typing import List, Dict
 
 from .base import BaseTranslator
-
-if TYPE_CHECKING:
-    from .context_memory import ContextMemory
 
 # Constants for retry logic
 MAX_RETRIES = 3
 RETRY_DELAY_BASE = 0.5  # Faster recovery: 0.5s → 1s → 2s
+MAX_BATCH_SIZE = 30  # Max texts per single Gemini API call
+DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
+
+
+def _normalize_api_keys(api_key: str = None, api_keys=None) -> List[str]:
+    raw_keys = []
+    if api_keys:
+        if isinstance(api_keys, str):
+            raw_keys.extend(re.split(r"[\s,;]+", api_keys))
+        else:
+            raw_keys.extend(api_keys)
+    if api_key:
+        raw_keys.extend(re.split(r"[\s,;]+", api_key))
+
+    seen = set()
+    keys = []
+    for key in raw_keys:
+        key = str(key or "").strip()
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+    return keys
+
+
+def _looks_like_key_failure(error: Exception) -> bool:
+    text = str(error).lower()
+    key_failure_markers = (
+        "401",
+        "403",
+        "429",
+        "api key",
+        "apikey",
+        "auth",
+        "exhausted",
+        "forbidden",
+        "invalid",
+        "permission",
+        "quota",
+        "resource_exhausted",
+        "unauthorized",
+    )
+    return any(marker in text for marker in key_failure_markers)
 
 
 class GeminiTranslator(BaseTranslator):
     """
-    Translator using Google Gemini 2.5 Flash-Lite.
+    Translator using Google Gemini 3.1 Flash-Lite.
     Supports batch translation to minimize API calls.
     """
     
-    def __init__(self, api_key: str = None, custom_prompt: str = None, style: str = "default"):
-        """
-        Initialize Gemini translator.
-        
-        Args:
-            api_key: Gemini API key. If None, reads from GEMINI_API_KEY env var.
-            custom_prompt: Custom instructions for translation style.
-            style: Preset style name from STYLE_PRESETS.
-        """
+    def __init__(
+        self,
+        api_key: str = None,
+        api_keys=None,
+        custom_prompt: str = None,
+        style: str = "default",
+        model_name: str = DEFAULT_GEMINI_MODEL,
+        client_factory=None,
+    ):
         super().__init__(custom_prompt=custom_prompt, style=style)
-        
-        self.api_key = api_key or os.environ.get("GEMINI_API_KEY")
-        if not self.api_key:
-            raise ValueError("Gemini API key required. Set GEMINI_API_KEY or pass api_key.")
-        
-        genai.configure(api_key=self.api_key)
-        self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
-        
-        
+
+        env_keys = os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY")
+        self.api_keys = _normalize_api_keys(api_key=api_key, api_keys=api_keys or env_keys)
+        if not self.api_keys:
+            raise ValueError("Gemini API key required. Set GEMINI_API_KEY(S) or pass api_key/api_keys.")
+
+        self.api_key = self.api_keys[0]
+        self._client_factory = client_factory
+        self._clients = {}
+        self._current_key_index = 0
+        self.exhausted_api_keys = set()
+        self.key_errors = {}
+        self.last_warning = None
+        self.model_name = str(model_name or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
+
+    def _default_client_factory(self, api_key):
+        try:
+            from google import genai
+        except Exception as error:
+            raise RuntimeError(
+                "google-genai SDK is required. Install/update it with: "
+                "python -m pip install --upgrade google-genai typing-extensions"
+            ) from error
+
+        return genai.Client(api_key=api_key)
+
+    def _get_client(self, api_key):
+        if api_key not in self._clients:
+            factory = self._client_factory or self._default_client_factory
+            self._clients[api_key] = factory(api_key)
+        return self._clients[api_key]
+
+    def _available_key_indices(self):
+        total = len(self.api_keys)
+        for offset in range(total):
+            idx = (self._current_key_index + offset) % total
+            if self.api_keys[idx] not in self.exhausted_api_keys:
+                yield idx
+
+    def _mark_key_exhausted(self, api_key, error):
+        self.exhausted_api_keys.add(api_key)
+        self.key_errors[api_key] = str(error)
+        print(f"Gemini key failed, rotating to next key: {error}")
+
+    def _generate_content_with_rotation(self, prompt):
+        last_error = None
+
+        for idx in list(self._available_key_indices()):
+            api_key = self.api_keys[idx]
+            client = self._get_client(api_key)
+
+            for attempt in range(MAX_RETRIES):
+                try:
+                    response = client.models.generate_content(
+                        model=self.model_name,
+                        contents=prompt,
+                    )
+                    self._current_key_index = idx
+                    self.api_key = api_key
+                    self.last_warning = None
+                    return response
+                except Exception as e:
+                    last_error = e
+                    if _looks_like_key_failure(e):
+                        self._mark_key_exhausted(api_key, e)
+                        break
+
+                    print(f"Gemini request attempt {attempt + 1}/{MAX_RETRIES} failed: {e}")
+                    if attempt < MAX_RETRIES - 1:
+                        delay = RETRY_DELAY_BASE * (2 ** attempt)
+                        print(f"Retrying in {delay}s...")
+                        time.sleep(delay)
+                    else:
+                        break
+
+        self.last_warning = "Tất cả Gemini API key đều không dùng được hoặc request thất bại."
+        raise RuntimeError(self.last_warning) from last_error
+
     def translate_single(
         self, 
         text: str, 
@@ -51,18 +159,6 @@ class GeminiTranslator(BaseTranslator):
         target: str = "en",
         custom_prompt: str = None
     ) -> str:
-        """
-        Translate a single text string.
-        
-        Args:
-            text: Text to translate
-            source: Source language code (ja, zh, ko, etc.)
-            target: Target language code
-            custom_prompt: Override custom prompt for this call
-            
-        Returns:
-            Translated text
-        """
         if not text or not text.strip():
             return text
             
@@ -86,48 +182,44 @@ IMPORTANT: Return ONLY the translated text. No explanations, no quotes, no forma
 Original text: {text}"""
         
         try:
-            response = self.model.generate_content(prompt)
+            response = self._generate_content_with_rotation(prompt)
             return response.text.strip()
         except Exception as e:
             print(f"Gemini translation error: {e}")
             return text
     
     def translate_batch(
-        self, 
-        texts: List[str], 
-        source: str = "ja", 
+        self,
+        texts: List[str],
+        source: str = "ja",
         target: str = "en",
         custom_prompt: str = None
     ) -> List[str]:
-        """
-        Translate multiple texts in a single API call with retry logic.
-        
-        Args:
-            texts: List of texts to translate
-            source: Source language code
-            target: Target language code
-            custom_prompt: Override custom prompt for this call
-            
-        Returns:
-            List of translated texts (same order)
-        """
         if not texts:
             return []
-            
-        # Filter empty texts but keep track of indices
+
         indexed_texts = [(i, t) for i, t in enumerate(texts) if t and t.strip()]
-        
+
         if not indexed_texts:
             return texts
-        
+
         texts_to_translate = [t for _, t in indexed_texts]
-        translations = self._translate_batch_internal(texts_to_translate, source, target, custom_prompt)
-        
-        # Rebuild full list with original empty strings preserved
+
+        # Chunk large batches to avoid timeouts and rate limits
+        if len(texts_to_translate) > MAX_BATCH_SIZE:
+            print(f"Chunking {len(texts_to_translate)} texts into batches of {MAX_BATCH_SIZE}")
+            all_translations = []
+            for chunk_start in range(0, len(texts_to_translate), MAX_BATCH_SIZE):
+                chunk = texts_to_translate[chunk_start:chunk_start + MAX_BATCH_SIZE]
+                chunk_translations = self._translate_batch_internal(chunk, source, target, custom_prompt)
+                all_translations.extend(chunk_translations)
+        else:
+            all_translations = self._translate_batch_internal(texts_to_translate, source, target, custom_prompt)
+
         result = list(texts)
-        for (orig_idx, _), trans in zip(indexed_texts, translations):
+        for (orig_idx, _), trans in zip(indexed_texts, all_translations):
             result[orig_idx] = trans
-            
+
         return result
     
     def _translate_batch_internal(
@@ -137,7 +229,6 @@ Original text: {text}"""
         target: str,
         custom_prompt: str = None
     ) -> List[str]:
-        """Internal method to translate a single chunk with retry logic."""
         source_name = self.LANG_NAMES.get(source, "Japanese")
         target_name = self.LANG_NAMES.get(target, "English")
         
@@ -170,13 +261,11 @@ Input texts (JSON array - mỗi item là 1 bubble):
 IMPORTANT: Trả về ĐÚNG JSON array với bản dịch theo THỨ TỰ GIỐNG HỆT.
 Format: ["bản dịch 1", "bản dịch 2", ...]"""
         
-        # Retry with exponential backoff
         for attempt in range(MAX_RETRIES):
             try:
-                response = self.model.generate_content(prompt)
+                response = self._generate_content_with_rotation(prompt)
                 result_text = response.text.strip()
                 
-                # Clean up response if needed
                 if result_text.startswith("```json"):
                     result_text = result_text[7:]
                 if result_text.startswith("```"):
@@ -187,7 +276,6 @@ Format: ["bản dịch 1", "bản dịch 2", ...]"""
                 
                 translations = json.loads(result_text)
                 
-                # Validate response length
                 if len(translations) != len(texts_to_translate):
                     raise ValueError(f"Expected {len(texts_to_translate)} translations, got {len(translations)}")
                 
@@ -197,45 +285,27 @@ Format: ["bản dịch 1", "bản dịch 2", ...]"""
                 error_str = str(e)
                 print(f"Gemini batch attempt {attempt + 1}/{MAX_RETRIES} failed: {e}")
                 
-                # Check if it's a quota error - don't retry or fallback
-                if "429" in error_str or "quota" in error_str.lower():
-                    print("⚠️ Quota exceeded! Returning original texts to avoid more API calls.")
-                    print("   Wait 1 minute or upgrade your Gemini API plan.")
-                    return texts_to_translate  # Return original texts
+                if "tất cả gemini api key" in error_str.lower():
+                    print("All Gemini keys failed. Returning original texts.")
+                    return texts_to_translate
                 
                 if attempt < MAX_RETRIES - 1:
                     delay = RETRY_DELAY_BASE * (2 ** attempt)
                     print(f"Retrying in {delay}s...")
                     time.sleep(delay)
                 else:
-                    # Only fallback to single translations if NOT quota error
                     print("All retries failed, falling back to single translations")
                     return [self.translate_single(t, source, target) for t in texts_to_translate]
         
-        return texts_to_translate  # Fallback: return original
+        return texts_to_translate
     
     def translate_pages_batch(
         self, 
         pages_texts: Dict[str, List[str]], 
         source: str = "ja", 
         target: str = "en",
-        custom_prompt: str = None,
-        context_memory: 'ContextMemory' = None
+        custom_prompt: str = None
     ) -> Dict[str, List[str]]:
-        """
-        Translate texts from multiple pages in a single API call.
-        Ideal for batch processing 10 manga pages at once.
-        
-        Args:
-            pages_texts: Dict mapping page names to list of texts
-            source: Source language code
-            target: Target language code
-            custom_prompt: Override custom prompt for this call
-            context_memory: Optional ContextMemory object for consistent translation
-            
-        Returns:
-            Dict with same structure but translated texts
-        """
         if not pages_texts:
             return {}
         
@@ -245,13 +315,8 @@ Format: ["bản dịch 1", "bản dịch 2", ...]"""
         style = custom_prompt or self.custom_prompt
         style_text = f"\nStyle instructions: {style}" if style else ""
         
-        # Build context section from ContextMemory if provided
-        context_section = ""
-        if context_memory:
-            context_section = context_memory.generate_context_prompt()
-        
         prompt = f"""Bạn là chuyên gia dịch manga/comic từ {source_name} sang {target_name}.
-{context_section}
+
 Đây là các trang LIÊN TIẾP trong cùng 1 story. Giữ mạch truyện và giọng nhân vật nhất quán.
 
 QUY TẮC DỊCH:
@@ -291,10 +356,9 @@ IMPORTANT: Trả về ĐÚNG JSON object với cấu trúc GIỐNG HỆT nhưng 
 Giữ nguyên tên page và thứ tự bubble. Không giải thích, không markdown."""
 
         try:
-            response = self.model.generate_content(prompt)
+            response = self._generate_content_with_rotation(prompt)
             result_text = response.text.strip()
             
-            # Clean up response
             if result_text.startswith("```json"):
                 result_text = result_text[7:]
             if result_text.startswith("```"):
@@ -307,7 +371,6 @@ Giữ nguyên tên page và thứ tự bubble. Không giải thích, không mark
             
         except Exception as e:
             print(f"Gemini pages batch translation error: {e}")
-            # Fallback: translate each page separately
             result = {}
             for page_name, texts in pages_texts.items():
                 result[page_name] = self.translate_batch(texts, source, target)
