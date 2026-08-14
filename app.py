@@ -33,6 +33,7 @@ from add_text import (
     refine_tall_narrow_ocr_bbox,
     render_all_blocks,
     should_skip_ocr_artifact,
+    sort_ocr_blocks_reading_order,
 )
 from ocr.chrome_lens_ocr import ChromeLensOCR
 from PIL import Image
@@ -920,12 +921,14 @@ def continue_translate():
                                            image_shape=original_image.shape,
                                            expand_ratio=0)
             if bbox and len(bbox) == 4:
-                block = {'text': text, 'bbox': bbox, '_bbox_expanded': True}
-                if text:
-                    block['_text_idx'] = text_index
-                    text_index += 1
-                    all_texts.append(text)
-                blocks.append(block)
+                blocks.append({'text': text, 'bbox': bbox, '_bbox_expanded': True})
+
+        blocks = sort_ocr_blocks_reading_order(blocks)
+        for block in blocks:
+            if block['text']:
+                block['_text_idx'] = text_index
+                text_index += 1
+                all_texts.append(block['text'])
         
         new_ocr_results.append((name, original_image, blocks))
     
@@ -990,7 +993,7 @@ def ocr_region():
     cropped = original_image[cy1:cy2, cx1:cx2]
 
     ocr_engine = ChromeLensOCR(ocr_language=session_data.get('source_lang', 'ja'))
-    blocks = ocr_engine(cropped)
+    blocks = sort_ocr_blocks_reading_order(ocr_engine(cropped))
 
     text = " ".join(b.get("text", "").strip() for b in blocks if b.get("text", "").strip())
     return {"text": text}

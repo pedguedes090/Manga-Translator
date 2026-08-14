@@ -385,14 +385,62 @@ def test_continue_translate_keeps_correction_bboxes_exact(monkeypatch):
         data={
             "session_id": session_id,
             "modified_blocks": json.dumps(
-                [{"image_idx": 0, "blocks": [{"text": "hello", "bbox": [10, 10, 20, 20]}]}]
+                [{
+                    "image_idx": 0,
+                    "blocks": [
+                        {"text": "right", "bbox": [35, 5, 55, 25]},
+                        {"text": "bottom", "bbox": [5, 40, 25, 60]},
+                        {"text": "left", "bbox": [5, 10, 25, 30]},
+                    ],
+                }]
             ),
         },
     )
 
     assert response.status_code == 200
-    assert captured["all_ocr_results"][0][2][0]["bbox"] == [10, 10, 20, 20]
+    captured_blocks = captured["all_ocr_results"][0][2]
+    assert [block["text"] for block in captured_blocks] == ["left", "right", "bottom"]
+    assert [block["_text_idx"] for block in captured_blocks] == [0, 1, 2]
+    assert captured_blocks[0]["bbox"] == [5, 10, 25, 30]
     assert captured["gemini_model"] == "gemini-session-model"
+
+
+def test_ocr_region_joins_blocks_in_reading_order(monkeypatch):
+    import app as app_module
+
+    session_id = str(uuid.uuid4())
+    app_module.ocr_sessions.clear()
+    app_module.ocr_sessions[session_id] = {
+        "all_ocr_results": [("page", np.full((80, 80, 3), 255, dtype=np.uint8), [])],
+        "source_lang": "en",
+    }
+
+    class FakeOCR:
+        def __init__(self, ocr_language):
+            assert ocr_language == "en"
+
+        def __call__(self, image):
+            return [
+                {"text": "right", "bbox": [30, 2, 50, 22]},
+                {"text": "bottom", "bbox": [2, 35, 25, 55]},
+                {"text": "left", "bbox": [2, 6, 22, 26]},
+            ]
+
+    monkeypatch.setattr(app_module, "ChromeLensOCR", FakeOCR)
+    response = app_module.app.test_client().post(
+        "/ocr-region",
+        data={
+            "session_id": session_id,
+            "image_idx": "0",
+            "x1": "0",
+            "y1": "0",
+            "x2": "70",
+            "y2": "70",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["text"] == "left right bottom"
 
 
 def test_build_preview_images_repairs_saved_hangul_tall_narrow_bbox():
