@@ -17,6 +17,7 @@ from add_text import (
     merge_nearby_ocr_blocks,
     refine_tall_narrow_ocr_bbox,
     should_skip_ocr_artifact,
+    sort_ocr_blocks_reading_order,
 )
 from translator import MangaTranslator
 
@@ -544,6 +545,46 @@ def test_merge_nearby_ocr_blocks_groups_stacked_text_regions():
     assert merged[0]["_merged_from"] == [0, 1]
     assert merged[1]["bbox"] == [0, 2081, 633, 2268]
     assert merged[1]["_merged_from"] == [2, 3]
+
+
+def test_reading_order_groups_y_jitter_into_left_to_right_rows_without_mutation():
+    blocks = [
+        {"text": "right", "bbox": [120, 10, 170, 50]},
+        {"text": "next-row", "bbox": [15, 90, 70, 130]},
+        {"text": "left", "bbox": [10, 20, 60, 60]},
+    ]
+    original_bboxes = [list(block["bbox"]) for block in blocks]
+
+    ordered = sort_ocr_blocks_reading_order(blocks)
+
+    assert [block["text"] for block in ordered] == ["left", "right", "next-row"]
+    assert blocks[0]["text"] == "right"
+    assert [block["bbox"] for block in blocks] == original_bboxes
+
+
+def test_reading_order_keeps_invalid_bboxes_stable_at_end():
+    blocks = [
+        {"text": "missing"},
+        {"text": "bottom", "bbox": [0, 80, 40, 120]},
+        {"text": "invalid", "bbox": [10, 10, 10, 20]},
+        {"text": "top", "bbox": [0, 5, 40, 45]},
+    ]
+
+    ordered = sort_ocr_blocks_reading_order(blocks)
+
+    assert [block["text"] for block in ordered] == ["top", "bottom", "missing", "invalid"]
+
+
+def test_merge_same_line_fragments_uses_left_to_right_text_order_with_y_jitter():
+    blocks = [
+        {"text": "RIGHT", "bbox": [65, 10, 100, 45]},
+        {"text": "LEFT", "bbox": [20, 16, 58, 51]},
+    ]
+
+    merged = merge_nearby_ocr_blocks(blocks)
+
+    assert len(merged) == 1
+    assert merged[0]["text"] == "LEFT\nRIGHT"
 
 
 def test_merge_nearby_ocr_blocks_does_not_join_separate_touching_bubbles():

@@ -86,6 +86,81 @@ def _range_overlap_ratio(a1, a2, b1, b2):
     return overlap / float(max(1, min(a2 - a1, b2 - b1)))
 
 
+def sort_ocr_blocks_reading_order(blocks):
+    """Return OCR blocks ordered by visual rows, then left to right."""
+    positioned = []
+    unpositioned = []
+    for index, block in enumerate(blocks or []):
+        bbox = _coerce_bbox_for_merge(
+            block.get("bbox") if isinstance(block, dict) else None
+        )
+        if bbox is None:
+            unpositioned.append((index, block))
+            continue
+        positioned.append({
+            "index": index,
+            "block": block,
+            "bbox": bbox,
+            "center_y": (bbox[1] + bbox[3]) / 2.0,
+            "height": bbox[3] - bbox[1],
+        })
+
+    positioned.sort(
+        key=lambda item: (item["bbox"][1], item["bbox"][0], item["index"])
+    )
+    rows = []
+    for item in positioned:
+        best_row = None
+        best_score = None
+        for row in rows:
+            row_half_height = row["average_height"] / 2.0
+            row_y1 = row["center_y"] - row_half_height
+            row_y2 = row["center_y"] + row_half_height
+            overlap = _range_overlap_ratio(
+                item["bbox"][1], item["bbox"][3], row_y1, row_y2
+            )
+            center_delta = abs(item["center_y"] - row["center_y"])
+            tolerance = max(
+                8.0,
+                min(item["height"], row["average_height"]) * 0.50,
+            )
+            if overlap < 0.30 and center_delta > tolerance:
+                continue
+            score = (overlap, -center_delta)
+            if best_score is None or score > best_score:
+                best_row = row
+                best_score = score
+
+        if best_row is None:
+            rows.append({
+                "items": [item],
+                "top": item["bbox"][1],
+                "center_y": item["center_y"],
+                "average_height": float(item["height"]),
+            })
+            continue
+
+        best_row["items"].append(item)
+        count = len(best_row["items"])
+        best_row["top"] = min(best_row["top"], item["bbox"][1])
+        best_row["center_y"] = (
+            sum(entry["center_y"] for entry in best_row["items"]) / count
+        )
+        best_row["average_height"] = (
+            sum(entry["height"] for entry in best_row["items"]) / count
+        )
+
+    rows.sort(key=lambda row: (row["top"], row["center_y"]))
+    ordered = []
+    for row in rows:
+        row["items"].sort(
+            key=lambda item: (item["bbox"][0], item["bbox"][1], item["index"])
+        )
+        ordered.extend(item["block"] for item in row["items"])
+    ordered.extend(block for _, block in unpositioned)
+    return ordered
+
+
 def _bbox_gap(a1, a2, b1, b2):
     if a2 < b1:
         return b1 - a2
@@ -162,7 +237,11 @@ def merge_nearby_ocr_blocks(blocks):
 
     merged = []
     for group in groups:
-        items = sorted(group['items'], key=lambda item: (item['bbox'][1], item['bbox'][0]))
+        ordered_blocks = sort_ocr_blocks_reading_order(
+            [item['block'] for item in group['items']]
+        )
+        items_by_id = {id(item['block']): item for item in group['items']}
+        items = [items_by_id[id(block)] for block in ordered_blocks]
         result = dict(items[0]['block'])
         text_parts = [
             str(item['block'].get('text', '')).strip()
@@ -175,7 +254,7 @@ def merge_nearby_ocr_blocks(blocks):
             result['_merged_from'] = [item['source_index'] for item in items]
         merged.append(result)
 
-    return merged
+    return sort_ocr_blocks_reading_order(merged)
 
 
 def _has_hangul_text(text):
