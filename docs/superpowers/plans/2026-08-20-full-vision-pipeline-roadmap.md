@@ -32,4 +32,3 @@ If a push is rejected, fetch, rebase, rerun the affected tests, and push normall
 - Bubble gating does not become mandatory until bubble-border damage remains below one percent.
 - Full-resolution LaMa remains restricted to complex masks and must preserve every outside-mask pixel exactly.
 - Legacy helpers are deprecated only in the final plan and only after all gates above pass.
-
