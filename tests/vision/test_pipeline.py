@@ -6,7 +6,7 @@ import numpy as np
 from add_text import assess_erasability, erase_text_region
 from vision.config import VisionConfig
 from vision.maskers.hybrid import HybridTextMasker
-from vision.pipeline import VisionPipeline, _choose_erase_method
+from vision.pipeline import VisionPipeline, _choose_erase_method, score_erasability
 from vision.types import (
     ErasabilityDecision,
     MaskResult,
@@ -57,6 +57,44 @@ def test_textured_artwork_uses_opencv_even_for_large_mask():
         _route_region("textured", "on_artwork_mixed", texture_std=35.0)
         == "telea"
     )
+
+
+def test_bounded_high_confidence_mask_on_complex_artwork_is_safe_for_lama():
+    region = _lama_block("complex", (0, 0, 20, 20)).region
+    mask_result = MaskResult(
+        roi_bbox=(0, 0, 20, 20),
+        mask=np.zeros((20, 20), np.uint8),
+        probability=None,
+        bubble_mask=None,
+        coverage=0.12,
+        confidence=0.9,
+        edge_touch_ratio=0.03,
+        backend="heuristic",
+    )
+
+    decision = score_erasability(region, mask_result, "artwork")
+
+    assert decision.safe is True
+    assert decision.reason == "complex_artwork_lama"
+
+
+def test_wide_mask_on_complex_artwork_stays_preserved():
+    region = _lama_block("complex", (0, 0, 20, 20)).region
+    mask_result = MaskResult(
+        roi_bbox=(0, 0, 20, 20),
+        mask=np.zeros((20, 20), np.uint8),
+        probability=None,
+        bubble_mask=None,
+        coverage=0.35,
+        confidence=0.9,
+        edge_touch_ratio=0.03,
+        backend="heuristic",
+    )
+
+    decision = score_erasability(region, mask_result, "artwork")
+
+    assert decision.safe is False
+    assert decision.reason == "complex_artwork"
 
 
 def _lama_block(block_id, roi_bbox):

@@ -184,11 +184,16 @@ def score_erasability(
         return ErasabilityDecision(False, "no_text_mask", 0.0, False)
     if coverage > 0.65:
         return ErasabilityDecision(False, "excessive_mask", 0.25, True)
-    if (
-        region.uniformity == "complex"
-        and region.texture_std > 55
-        and region.bubble_context != "in_bubble"
-    ):
+    if region.uniformity == "complex" and region.bubble_context != "in_bubble":
+        bounded_artwork_mask = (
+            coverage <= 0.25
+            and mask_result.edge_touch_ratio <= 0.08
+            and mask_result.confidence >= 0.34
+        )
+        if bounded_artwork_mask:
+            return ErasabilityDecision(
+                True, "complex_artwork_lama", 0.62, False
+            )
         return ErasabilityDecision(False, "complex_artwork", 0.30, True)
     if mask_result.edge_touch_ratio > 0.28 and region.bubble_context != "in_bubble":
         return ErasabilityDecision(False, "risky_background", 0.35, True)
