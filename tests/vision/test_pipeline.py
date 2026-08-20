@@ -4,8 +4,54 @@ import cv2
 import numpy as np
 
 from add_text import assess_erasability, erase_text_region
+from vision.config import VisionConfig
 from vision.maskers.hybrid import HybridTextMasker
-from vision.pipeline import VisionPipeline
+from vision.pipeline import VisionPipeline, _choose_erase_method
+from vision.types import ErasabilityDecision, MaskResult, RegionAnalysis
+
+
+def _route_region(uniformity, bubble_context, texture_std, coverage=0.5):
+    region = RegionAnalysis(
+        mean_bgr=(220, 220, 220),
+        mean_intensity=220.0,
+        intensity_std=20.0,
+        edge_score=30.0,
+        texture_std=texture_std,
+        dominant_tone="light",
+        uniformity=uniformity,
+        bubble_context=bubble_context,
+    )
+    mask_result = MaskResult(
+        roi_bbox=(0, 0, 20, 20),
+        mask=np.full((20, 20), 255, np.uint8),
+        probability=None,
+        bubble_mask=None,
+        coverage=coverage,
+        confidence=0.9,
+        edge_touch_ratio=0.0,
+        backend="heuristic",
+    )
+    decision = ErasabilityDecision(True, "accepted", 0.9, False)
+    config = VisionConfig.load("configs/vision.json")
+    return _choose_erase_method(region, mask_result, decision, config)
+
+
+def test_large_mask_inside_bubble_uses_opencv_not_lama():
+    assert _route_region("textured", "in_bubble", texture_std=35.0) == "telea"
+
+
+def test_nonflat_uniform_background_uses_opencv_not_lama():
+    assert (
+        _route_region("uniform", "on_artwork_light", texture_std=20.0)
+        == "telea"
+    )
+
+
+def test_textured_artwork_uses_opencv_even_for_large_mask():
+    assert (
+        _route_region("textured", "on_artwork_mixed", texture_std=35.0)
+        == "telea"
+    )
 
 
 def test_prepare_then_assess_and_erase_generates_one_mask():

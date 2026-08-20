@@ -199,7 +199,9 @@ def _choose_erase_method(
         and region.texture_std <= config.inpaint.flat_max_texture_std
     ):
         return "flat"
-    if region.uniformity != "complex" and mask_result.coverage <= 0.25:
+    if region.bubble_context == "in_bubble":
+        return "telea"
+    if region.uniformity != "complex":
         return "telea"
     return "lama_full_page"
 
