@@ -26,6 +26,9 @@ from vision.types import (
 )
 
 
+_AUTO_LAMA = object()
+
+
 class VisionPipeline:
     """Prepare each OCR block once, then reuse its analysis and mask."""
 
@@ -33,12 +36,24 @@ class VisionPipeline:
         self,
         masker: TextMasker | None = None,
         bubble_segmenter: object | None = None,
-        lama_inpainter: object | None = None,
+        lama_inpainter: object | None = _AUTO_LAMA,
         config: VisionConfig | None = None,
     ) -> None:
         self.config = config or _load_default_config()
         self.masker = masker or build_text_masker(self.config)
         self.bubble_segmenter = bubble_segmenter
+        if lama_inpainter is _AUTO_LAMA:
+            from vision.inpainting.lama import build_lama_inpainter
+
+            lama_inpainter = build_lama_inpainter(
+                device="cuda" if self.config.profile == "cuda" else "cpu",
+                precision=self.config.inpaint.precision,
+                context_min_px=self.config.inpaint.oom_context_min_px,
+                context_max_mask_ratio=(
+                    self.config.inpaint.oom_context_max_mask_ratio
+                ),
+                telea_radius=self.config.inpaint.telea_radius,
+            )
         self.lama_inpainter = lama_inpainter
 
     def prepare_page(
@@ -109,9 +124,23 @@ class VisionPipeline:
                 inpaint = getattr(self.lama_inpainter, "inpaint", None)
                 if inpaint is None:
                     raise TypeError("lama_inpainter must provide inpaint(image, mask)")
-                restored = inpaint(image.copy(), union_mask)
-                if not isinstance(restored, np.ndarray) or restored.shape != image.shape:
-                    raise ValueError("LaMa output must match the input image shape")
+                try:
+                    restored = inpaint(image.copy(), union_mask)
+                    if (
+                        not isinstance(restored, np.ndarray)
+                        or restored.shape != image.shape
+                    ):
+                        raise ValueError("LaMa output must match the input image shape")
+                    last_run = getattr(self.lama_inpainter, "last_run", None)
+                    warning = getattr(last_run, "warning", None)
+                except Exception as exc:
+                    restored = cv2.inpaint(
+                        image,
+                        union_mask,
+                        self.config.inpaint.telea_radius,
+                        cv2.INPAINT_TELEA,
+                    )
+                    warning = f"LaMa failed; used Telea fallback: {exc}"
             output[union_mask > 0] = restored[union_mask > 0]
             elapsed_ms = (perf_counter() - started) * 1000.0
             for index in lama_indexes:

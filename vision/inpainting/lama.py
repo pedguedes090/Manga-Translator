@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
+from pathlib import Path
+from time import perf_counter
 from typing import Protocol
 
 import cv2
@@ -26,6 +29,129 @@ class LamaRunStats:
     full_shape: tuple[int, int]
     retry_shape: tuple[int, int] | None = None
     warning: str | None = None
+
+
+class TorchLamaBackend:
+    """Lazy PyTorch backend for the AnimeMangaInpainting LaMa checkpoint."""
+
+    def __init__(
+        self,
+        checkpoint_path: str | Path | None = None,
+        *,
+        model: object | None = None,
+        device: str = "cuda",
+        precision: str = "fp16",
+    ) -> None:
+        if precision not in {"fp16", "fp32"}:
+            raise ValueError("precision must be fp16 or fp32")
+        self.checkpoint_path = (
+            Path(checkpoint_path).expanduser().resolve()
+            if checkpoint_path is not None
+            else None
+        )
+        self.model = model
+        self.device_name = device
+        self.precision = precision
+        self.last_elapsed_ms = 0.0
+        self.last_peak_vram_bytes = 0
+        self.last_precision = precision
+        self._torch = None
+
+    def _ensure_model_loaded(self):
+        import torch
+
+        self._torch = torch
+        device = torch.device(self.device_name)
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA is required for the configured LaMa runtime")
+        if self.model is None:
+            if self.checkpoint_path is None or not self.checkpoint_path.is_file():
+                raise FileNotFoundError(
+                    f"LaMa checkpoint not found: {self.checkpoint_path}"
+                )
+            from vision.inpainting.lama_arch import build_lama_model
+
+            self.model = build_lama_model(self.checkpoint_path, device=device)
+        eval_model = getattr(self.model, "eval", None)
+        if eval_model is not None:
+            eval_model()
+        return torch, device
+
+    def inpaint(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        image, mask = _validate_inputs(image, mask)
+        torch, device = self._ensure_model_loaded()
+        started = perf_counter()
+        try:
+            rgb = np.ascontiguousarray(image[:, :, ::-1])
+            image_tensor = (
+                torch.from_numpy(rgb).float().permute(2, 0, 1) / 255.0
+            )
+            mask_tensor = torch.from_numpy((mask > 0).astype(np.float32))[None]
+            image_tensor = image_tensor * (1.0 - mask_tensor)
+            height, width = image.shape[:2]
+            pad_height = (-height) % 8
+            pad_width = (-width) % 8
+            if pad_height or pad_width:
+                image_tensor = torch.nn.functional.pad(
+                    image_tensor,
+                    (0, pad_width, 0, pad_height),
+                    mode="reflect",
+                )
+                mask_tensor = torch.nn.functional.pad(
+                    mask_tensor,
+                    (0, pad_width, 0, pad_height),
+                    mode="constant",
+                    value=0,
+                )
+            model_input = torch.cat((image_tensor, mask_tensor), dim=0)
+            model_input = model_input[None].to(device)
+
+            if device.type == "cuda":
+                torch.cuda.reset_peak_memory_stats(device)
+            use_fp16 = self._use_fp16(device)
+            output = self._run_model(torch, device, model_input, use_fp16)
+            self.last_precision = "fp16" if use_fp16 else "fp32"
+            if use_fp16 and not bool(torch.isfinite(output).all()):
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+                output = self._run_model(torch, device, model_input, False)
+                self.last_precision = "fp32_fallback"
+            if not bool(torch.isfinite(output).all()):
+                raise RuntimeError("LaMa produced non-finite output")
+            output = output[0, :, :height, :width].float().cpu().clamp(0, 1)
+            result_rgb = (
+                output.permute(1, 2, 0).numpy() * 255.0
+            ).round().astype(np.uint8)
+            if device.type == "cuda":
+                self.last_peak_vram_bytes = int(
+                    torch.cuda.max_memory_allocated(device)
+                )
+            return np.ascontiguousarray(result_rgb[:, :, ::-1])
+        except torch.cuda.OutOfMemoryError as exc:
+            raise LamaCudaOutOfMemory(str(exc)) from exc
+        finally:
+            self.last_elapsed_ms = (perf_counter() - started) * 1000.0
+
+    def _use_fp16(self, device: object) -> bool:
+        return getattr(device, "type", None) == "cuda" and self.precision == "fp16"
+
+    def _run_model(self, torch, device, model_input, use_fp16: bool):
+        with torch.inference_mode(), torch.autocast(
+            device_type=device.type,
+            dtype=torch.float16,
+            enabled=use_fp16,
+        ):
+            return self.model(model_input)
+
+    def clear_cuda_cache(self) -> None:
+        torch = self._torch
+        if torch is None:
+            try:
+                import torch
+            except ImportError:
+                return
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 class ResilientLamaInpainter:
@@ -100,6 +226,52 @@ class ResilientLamaInpainter:
             "context_crop", 2, full_shape, crop_image.shape[:2]
         )
         return output
+
+
+def discover_lama_checkpoint(
+    explicit_path: str | Path | None = None,
+) -> Path | None:
+    """Find a local checkpoint without importing or initializing PyTorch."""
+    repository = Path(__file__).resolve().parents[2]
+    candidates = [
+        explicit_path,
+        os.environ.get("LAMA_CHECKPOINT"),
+        repository / "models" / "cache" / "lama_large_512px.ckpt",
+        repository / "model" / "lama_large_512px.ckpt",
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate).expanduser().resolve()
+        if path.is_file():
+            return path
+    return None
+
+
+def build_lama_inpainter(
+    checkpoint_path: str | Path | None = None,
+    *,
+    device: str = "cuda",
+    precision: str = "fp16",
+    context_min_px: int = 256,
+    context_max_mask_ratio: float = 0.08,
+    telea_radius: int = 3,
+) -> ResilientLamaInpainter | None:
+    """Build the lazy production runtime when a local checkpoint is present."""
+    checkpoint = discover_lama_checkpoint(checkpoint_path)
+    if checkpoint is None:
+        return None
+    backend = TorchLamaBackend(
+        checkpoint,
+        device=device,
+        precision=precision,
+    )
+    return ResilientLamaInpainter(
+        backend,
+        context_min_px=context_min_px,
+        context_max_mask_ratio=context_max_mask_ratio,
+        telea_radius=telea_radius,
+    )
 
 
 def _validate_inputs(

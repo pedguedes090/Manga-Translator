@@ -165,6 +165,23 @@ def test_erase_page_continues_with_telea_when_lama_runtime_fails():
     assert "Telea" in results[0].warning
 
 
+def test_pipeline_auto_builds_lama_runtime_from_cuda_config(monkeypatch):
+    runtime = object()
+    builder = Mock(return_value=runtime)
+    monkeypatch.setattr("vision.inpainting.lama.build_lama_inpainter", builder)
+
+    pipeline = VisionPipeline(masker=HybridTextMasker())
+
+    assert pipeline.lama_inpainter is runtime
+    builder.assert_called_once_with(
+        device="cuda",
+        precision="fp16",
+        context_min_px=256,
+        context_max_mask_ratio=0.08,
+        telea_radius=3,
+    )
+
+
 def test_prepare_then_assess_and_erase_generates_one_mask():
     image = np.full((90, 150, 3), 245, np.uint8)
     cv2.putText(

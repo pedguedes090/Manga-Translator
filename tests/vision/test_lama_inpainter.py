@@ -1,8 +1,11 @@
 import numpy as np
 
 from vision.inpainting.lama import (
+    build_lama_inpainter,
+    discover_lama_checkpoint,
     LamaCudaOutOfMemory,
     ResilientLamaInpainter,
+    TorchLamaBackend,
 )
 
 
@@ -84,3 +87,128 @@ def test_second_cuda_oom_falls_back_to_telea_and_reports_warning():
     assert lama.last_run.mode == "telea_fallback"
     assert "CUDA OOM" in lama.last_run.warning
     assert np.array_equal(output[mask == 0], page[mask == 0])
+
+
+def test_torch_backend_keeps_native_size_and_pads_model_input_to_eight():
+    import torch
+
+    class FakeModel:
+        def __init__(self):
+            self.calls = []
+
+        def eval(self):
+            return self
+
+        def __call__(self, model_input):
+            self.calls.append(model_input.detach().cpu())
+            batch, _, height, width = model_input.shape
+            return torch.full(
+                (batch, 3, height, width),
+                0.25,
+                device=model_input.device,
+            )
+
+    image = np.full((73, 119, 3), (10, 20, 30), np.uint8)
+    mask = np.zeros((73, 119), np.uint8)
+    mask[20:35, 40:70] = 255
+    model = FakeModel()
+    backend = TorchLamaBackend(model=model, device="cpu", precision="fp32")
+
+    output = backend.inpaint(image, mask)
+
+    assert output.shape == image.shape
+    assert output.dtype == np.uint8
+    assert len(model.calls) == 1
+    model_input = model.calls[0]
+    assert tuple(model_input.shape) == (1, 4, 80, 120)
+    assert torch.all(model_input[0, :3, 25, 50] == 0)
+    assert model_input[0, 3, 25, 50] == 1
+    assert torch.all(model_input[0, 3, 73:, :] == 0)
+    assert torch.all(model_input[0, 3, :, 119:] == 0)
+    assert np.all(output == 64)
+    assert backend.last_elapsed_ms > 0
+
+
+def test_torch_backend_normalizes_cuda_out_of_memory():
+    import pytest
+    import torch
+
+    class OomModel:
+        def eval(self):
+            return self
+
+        def __call__(self, model_input):
+            raise torch.cuda.OutOfMemoryError("synthetic allocation failure")
+
+    backend = TorchLamaBackend(model=OomModel(), device="cpu", precision="fp32")
+
+    with pytest.raises(LamaCudaOutOfMemory, match="synthetic allocation failure"):
+        backend.inpaint(
+            np.zeros((16, 16, 3), np.uint8),
+            np.full((16, 16), 255, np.uint8),
+        )
+
+
+def test_torch_backend_retries_fp32_when_fp16_output_is_not_finite(monkeypatch):
+    import torch
+
+    class UnstableHalfModel:
+        def __init__(self):
+            self.calls = 0
+
+        def eval(self):
+            return self
+
+        def __call__(self, model_input):
+            self.calls += 1
+            batch, _, height, width = model_input.shape
+            value = float("nan") if self.calls == 1 else 0.5
+            return torch.full(
+                (batch, 3, height, width), value, device=model_input.device
+            )
+
+    model = UnstableHalfModel()
+    backend = TorchLamaBackend(model=model, device="cpu", precision="fp16")
+    monkeypatch.setattr(backend, "_use_fp16", lambda device: True)
+
+    output = backend.inpaint(
+        np.zeros((16, 16, 3), np.uint8),
+        np.full((16, 16), 255, np.uint8),
+    )
+
+    assert model.calls == 2
+    assert np.all(output == 128)
+    assert backend.last_precision == "fp32_fallback"
+
+
+def test_checkpoint_discovery_prefers_explicit_then_environment(tmp_path, monkeypatch):
+    explicit = tmp_path / "explicit.ckpt"
+    environment = tmp_path / "environment.ckpt"
+    explicit.write_bytes(b"explicit")
+    environment.write_bytes(b"environment")
+    monkeypatch.setenv("LAMA_CHECKPOINT", str(environment))
+
+    assert discover_lama_checkpoint(explicit) == explicit.resolve()
+    assert discover_lama_checkpoint() == environment.resolve()
+
+
+def test_build_lama_inpainter_wires_cuda_and_context_without_loading_model(tmp_path):
+    checkpoint = tmp_path / "lama.ckpt"
+    checkpoint.write_bytes(b"lazy checkpoint placeholder")
+
+    lama = build_lama_inpainter(
+        checkpoint,
+        device="cuda",
+        precision="fp16",
+        context_min_px=123,
+        context_max_mask_ratio=0.07,
+        telea_radius=5,
+    )
+
+    assert isinstance(lama, ResilientLamaInpainter)
+    assert isinstance(lama.backend, TorchLamaBackend)
+    assert lama.backend.checkpoint_path == checkpoint.resolve()
+    assert lama.backend.device_name == "cuda"
+    assert lama.context_min_px == 123
+    assert lama.context_max_mask_ratio == 0.07
+    assert lama.telea_radius == 5
