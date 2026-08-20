@@ -30,3 +30,13 @@ def test_config_rejects_reversed_probability_thresholds(tmp_path):
 
     with pytest.raises(ValueError, match="prob_low must be less than prob_high"):
         VisionConfig.load(path)
+
+
+def test_config_rejects_string_rollout_gates(tmp_path):
+    path = tmp_path / "vision.json"
+    path.write_text(
+        json.dumps({"hybrid_gate_passed": "false"}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="hybrid_gate_passed must be boolean"):
+        VisionConfig.load(path)

@@ -12,6 +12,7 @@ import numpy as np
 from vision.config import VisionConfig
 from vision.maskers.base import TextMasker
 from vision.maskers.heuristic import HeuristicTextMasker
+from vision.maskers.hybrid import HybridTextMasker
 from vision.region_analysis import analyze_region
 from vision.types import (
     BBox,
@@ -35,7 +36,7 @@ class VisionPipeline:
         config: VisionConfig | None = None,
     ) -> None:
         self.config = config or _load_default_config()
-        self.masker = masker or HeuristicTextMasker(self.config.text_mask)
+        self.masker = masker or build_text_masker(self.config)
         self.bubble_segmenter = bubble_segmenter
 
     def prepare_page(
@@ -130,6 +131,20 @@ def score_erasability(
     else:
         reason = "risky_background"
     return ErasabilityDecision(safe, reason, score, not safe)
+
+
+def build_text_masker(config: VisionConfig) -> TextMasker:
+    """Select a masker explicitly, keeping gated auto rollout fail-closed."""
+    backend = config.mask_backend
+    if backend == "heuristic":
+        return HeuristicTextMasker(config.text_mask)
+    if backend == "hybrid" or (backend == "auto" and config.hybrid_gate_passed):
+        return HybridTextMasker(
+            config.text_mask, bubble_border_px=config.bubble.safe_border_px
+        )
+    if backend == "auto":
+        return HeuristicTextMasker(config.text_mask)
+    raise RuntimeError("neural text masking backend is not installed yet")
 
 
 def erase_prepared_block(

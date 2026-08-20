@@ -13,6 +13,10 @@ _DEFAULTS: dict[str, Any] = {
     "profile": "cuda",
     "mask_backend": "auto",
     "allow_cpu_fallback": True,
+    "hybrid_gate_passed": False,
+    "neural_gate_passed": False,
+    "bubble_gate_passed": False,
+    "production_ready": False,
     "text_mask": {
         "input_size": 512,
         "crop_padding_ratio": 0.12,
@@ -87,6 +91,10 @@ class VisionConfig:
     profile: str
     mask_backend: str
     allow_cpu_fallback: bool
+    hybrid_gate_passed: bool
+    neural_gate_passed: bool
+    bubble_gate_passed: bool
+    production_ready: bool
     text_mask: TextMaskConfig
     bubble: BubbleConfig
     inpaint: InpaintConfig
@@ -107,7 +115,11 @@ class VisionConfig:
         config = cls(
             profile=str(data["profile"]),
             mask_backend=str(data["mask_backend"]),
-            allow_cpu_fallback=bool(data["allow_cpu_fallback"]),
+            allow_cpu_fallback=_boolean(data, "allow_cpu_fallback"),
+            hybrid_gate_passed=_boolean(data, "hybrid_gate_passed"),
+            neural_gate_passed=_boolean(data, "neural_gate_passed"),
+            bubble_gate_passed=_boolean(data, "bubble_gate_passed"),
+            production_ready=_boolean(data, "production_ready"),
             text_mask=TextMaskConfig(**data["text_mask"]),
             bubble=BubbleConfig(**data["bubble"]),
             inpaint=InpaintConfig(**data["inpaint"]),
@@ -124,6 +136,8 @@ class VisionConfig:
         return sha256(canonical).hexdigest()
 
     def _validate(self) -> None:
+        if self.mask_backend not in {"auto", "heuristic", "hybrid", "neural"}:
+            raise ValueError("mask_backend must be auto, heuristic, hybrid, or neural")
         text_mask = self.text_mask
         if not 0 <= text_mask.prob_low < text_mask.prob_high <= 1:
             raise ValueError("prob_low must be less than prob_high")
@@ -151,3 +165,10 @@ def _merge_defaults(defaults: dict[str, Any], overrides: dict[str, Any]) -> dict
         else:
             merged[key] = override_value
     return merged
+
+
+def _boolean(data: dict[str, Any], key: str) -> bool:
+    value = data[key]
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be boolean")
+    return value

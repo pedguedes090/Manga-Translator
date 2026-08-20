@@ -2,6 +2,10 @@
   "profile": "cuda",
   "mask_backend": "auto",
   "allow_cpu_fallback": true,
+  "hybrid_gate_passed": false,
+  "neural_gate_passed": false,
+  "bubble_gate_passed": false,
+  "production_ready": false,
   "text_mask": {
     "input_size": 512,
     "crop_padding_ratio": 0.12,
