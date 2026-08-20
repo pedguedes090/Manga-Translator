@@ -7,7 +7,7 @@ import numpy as np
 
 from vision.config import TextMaskConfig
 from vision.maskers.base import TextMasker
-from vision.maskers.heuristic import remove_screentone_dots
+from vision.maskers.heuristic import HeuristicTextMasker, remove_screentone_dots
 from vision.postprocess import (
     apply_bubble_gate,
     hysteresis_mask,
@@ -19,13 +19,15 @@ from vision.types import BBox, BubbleInstance, MaskResult, RegionAnalysis
 _DEFAULT_CONFIG = TextMaskConfig(
     input_size=512,
     crop_padding_ratio=0.12,
-    prob_high=0.62,
-    prob_low=0.34,
+    prob_high=0.40,
+    prob_low=0.20,
     max_coverage=0.65,
     max_bubble_border_overlap=0.02,
     dilation_min_px=1,
     dilation_max_px=4,
 )
+
+_RESIDUAL_SUPPLEMENT_MAX_COVERAGE = 0.15
 
 
 class HybridTextMasker(TextMasker):
@@ -40,6 +42,7 @@ class HybridTextMasker(TextMasker):
         if bubble_border_px < 0:
             raise ValueError("bubble_border_px cannot be negative")
         self.bubble_border_px = bubble_border_px
+        self.heuristic = HeuristicTextMasker(self.config)
 
     def generate(
         self,
@@ -49,6 +52,17 @@ class HybridTextMasker(TextMasker):
         region: RegionAnalysis,
         bubble: BubbleInstance | None,
     ) -> MaskResult:
+        heuristic_result = self.heuristic.generate(
+            image, bbox, text, region, bubble
+        )
+        if heuristic_result.coverage > _RESIDUAL_SUPPLEMENT_MAX_COVERAGE:
+            return _heuristic_only_result(
+                heuristic_result,
+                bubble,
+                image.shape[:2],
+                self.bubble_border_px,
+            )
+
         roi_bbox, inner_rect = _expanded_roi(
             bbox, image.shape[:2], self.config.crop_padding_ratio
         )
@@ -88,9 +102,30 @@ class HybridTextMasker(TextMasker):
                 )
             _clear_crop_border(mask, dilation_radius)
 
+        residual_mask = mask
+        heuristic_mask = np.zeros_like(residual_mask)
+        inner_x1, inner_y1, inner_x2, inner_y2 = inner_rect
+        heuristic_mask[inner_y1:inner_y2, inner_x1:inner_x2] = (
+            heuristic_result.mask
+        )
+        mask, fusion_mode = _fuse_with_heuristic(
+            residual_mask,
+            heuristic_mask,
+            heuristic_result.coverage,
+        )
+        if bubble_mask is not None:
+            mask = apply_bubble_gate(
+                mask, bubble_mask, border_px=self.bubble_border_px
+            )
+
         nonzero = int(np.count_nonzero(mask))
         coverage = nonzero / float(max(mask.size, 1))
-        confidence = float(np.mean(probability[mask > 0])) if nonzero else 0.0
+        residual_nonzero = int(np.count_nonzero(residual_mask))
+        confidence = (
+            float(np.mean(probability[residual_mask > 0]))
+            if residual_nonzero
+            else heuristic_result.confidence
+        )
         return MaskResult(
             roi_bbox=roi_bbox,
             mask=mask,
@@ -108,8 +143,51 @@ class HybridTextMasker(TextMasker):
                     "final": _component_count(mask),
                 },
                 "dilation_radius": dilation_radius,
+                "fusion_mode": fusion_mode,
+                "heuristic_coverage": heuristic_result.coverage,
             },
         )
+
+
+def _fuse_with_heuristic(
+    residual_mask: np.ndarray,
+    heuristic_mask: np.ndarray,
+    heuristic_coverage: float,
+) -> tuple[np.ndarray, str]:
+    """Supplement weak heuristic masks without adding noise to adequate ones."""
+    if residual_mask.shape != heuristic_mask.shape:
+        raise ValueError("hybrid masks must have matching shapes")
+    if heuristic_coverage > _RESIDUAL_SUPPLEMENT_MAX_COVERAGE:
+        return heuristic_mask.copy(), "heuristic_only"
+    return cv2.bitwise_or(heuristic_mask, residual_mask), "heuristic_plus_residual"
+
+
+def _heuristic_only_result(
+    heuristic: MaskResult,
+    bubble: BubbleInstance | None,
+    image_shape: tuple[int, int],
+    bubble_border_px: int,
+) -> MaskResult:
+    mask = heuristic.mask.copy()
+    bubble_mask = _bubble_mask_for_roi(bubble, heuristic.roi_bbox, image_shape)
+    if bubble_mask is not None:
+        mask = apply_bubble_gate(mask, bubble_mask, border_px=bubble_border_px)
+    nonzero = int(np.count_nonzero(mask))
+    return MaskResult(
+        roi_bbox=heuristic.roi_bbox,
+        mask=mask,
+        probability=None,
+        bubble_mask=bubble_mask,
+        coverage=nonzero / float(max(mask.size, 1)),
+        confidence=heuristic.confidence,
+        edge_touch_ratio=_edge_touch_ratio(mask),
+        backend="hybrid",
+        debug={
+            "fusion_mode": "heuristic_only",
+            "heuristic_coverage": heuristic.coverage,
+            "dilation_radius": 1,
+        },
+    )
 
 
 def _expanded_roi(

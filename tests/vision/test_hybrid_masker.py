@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-from vision.maskers.hybrid import HybridTextMasker
+from vision.maskers.hybrid import HybridTextMasker, _fuse_with_heuristic
 from vision.postprocess import (
     apply_bubble_gate,
     hysteresis_mask,
@@ -43,6 +43,38 @@ def test_component_filter_drops_shapes_outside_the_ocr_anchor():
 
     assert filtered[4, 4] == 0
     assert filtered[10, 16] == 255
+
+
+def test_low_coverage_heuristic_is_supplemented_by_residual_mask():
+    heuristic = np.zeros((9, 12), np.uint8)
+    heuristic[3:6, 2:4] = 255
+    residual = np.zeros_like(heuristic)
+    residual[3:6, 8:10] = 255
+
+    fused, mode = _fuse_with_heuristic(
+        residual,
+        heuristic,
+        heuristic_coverage=0.05,
+    )
+
+    assert np.all(fused[3:6, 2:4] == 255)
+    assert np.all(fused[3:6, 8:10] == 255)
+    assert mode == "heuristic_plus_residual"
+
+
+def test_adequate_heuristic_ignores_residual_false_positives():
+    heuristic = np.zeros((9, 12), np.uint8)
+    heuristic[3:6, 2:4] = 255
+    residual = np.full_like(heuristic, 255)
+
+    fused, mode = _fuse_with_heuristic(
+        residual,
+        heuristic,
+        heuristic_coverage=0.25,
+    )
+
+    assert np.array_equal(fused, heuristic)
+    assert mode == "heuristic_only"
 
 
 def test_hybrid_masker_preserves_bubble_outline():
