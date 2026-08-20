@@ -42,6 +42,7 @@ def test_lama_uses_one_full_resolution_call_and_composites_only_mask():
     output = lama.inpaint(page, mask)
 
     assert len(backend.calls) == 1
+    assert backend.clear_calls == 1
     assert backend.calls[0][0].shape == page.shape
     assert lama.last_run.mode == "full_page"
     assert np.all(output[mask > 0] == (10, 20, 240))
@@ -69,7 +70,7 @@ def test_cuda_oom_retries_with_context_crop_at_original_resolution():
     assert np.count_nonzero(retry_mask) / retry_mask.size <= 0.081
     assert retry_image.shape[0] >= 20 + 2 * 32
     assert retry_image.shape[1] >= 30 + 2 * 32
-    assert backend.clear_calls == 1
+    assert backend.clear_calls == 2
     assert lama.last_run.mode == "context_crop"
     assert np.array_equal(output[mask == 0], page[mask == 0])
 

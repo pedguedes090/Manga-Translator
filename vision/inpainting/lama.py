@@ -203,6 +203,8 @@ class ResilientLamaInpainter:
             self.last_run = LamaRunStats("full_page", 1, full_shape)
             return _composite(image, restored, binary_mask)
         except LamaCudaOutOfMemory:
+            pass
+        finally:
             self.backend.clear_cuda_cache()
 
         x1, y1, x2, y2 = _context_box(
@@ -216,7 +218,6 @@ class ResilientLamaInpainter:
             restored_crop = self.backend.inpaint(crop_image, crop_mask)
             restored_crop = _validate_output(restored_crop, crop_image.shape)
         except LamaCudaOutOfMemory as exc:
-            self.backend.clear_cuda_cache()
             restored = cv2.inpaint(
                 image, binary_mask, self.telea_radius, cv2.INPAINT_TELEA
             )
@@ -229,6 +230,8 @@ class ResilientLamaInpainter:
                 warning,
             )
             return _composite(image, restored, binary_mask)
+        finally:
+            self.backend.clear_cuda_cache()
 
         output = image.copy()
         crop_output = _composite(crop_image, restored_crop, crop_mask)
