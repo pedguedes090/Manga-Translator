@@ -7,7 +7,12 @@ from add_text import assess_erasability, erase_text_region
 from vision.config import VisionConfig
 from vision.maskers.hybrid import HybridTextMasker
 from vision.pipeline import VisionPipeline, _choose_erase_method
-from vision.types import ErasabilityDecision, MaskResult, RegionAnalysis
+from vision.types import (
+    ErasabilityDecision,
+    MaskResult,
+    PreparedBlock,
+    RegionAnalysis,
+)
 
 
 def _route_region(uniformity, bubble_context, texture_std, coverage=0.5):
@@ -52,6 +57,69 @@ def test_textured_artwork_uses_opencv_even_for_large_mask():
         _route_region("textured", "on_artwork_mixed", texture_std=35.0)
         == "telea"
     )
+
+
+def _lama_block(block_id, roi_bbox):
+    x1, y1, x2, y2 = roi_bbox
+    region = RegionAnalysis(
+        mean_bgr=(100, 100, 100),
+        mean_intensity=100.0,
+        intensity_std=60.0,
+        edge_score=60.0,
+        texture_std=60.0,
+        dominant_tone="mid",
+        uniformity="complex",
+        bubble_context="on_artwork_mixed",
+    )
+    mask = np.full((y2 - y1, x2 - x1), 255, np.uint8)
+    return PreparedBlock(
+        block_id=block_id,
+        text="",
+        bbox=roi_bbox,
+        region=region,
+        mask_result=MaskResult(
+            roi_bbox=roi_bbox,
+            mask=mask,
+            probability=None,
+            bubble_mask=None,
+            coverage=1.0,
+            confidence=0.9,
+            edge_touch_ratio=0.0,
+            backend="heuristic",
+        ),
+        decision=ErasabilityDecision(True, "accepted_complex", 0.9, False),
+        erase_method="lama_full_page",
+    )
+
+
+def test_erase_page_unions_complex_masks_for_one_inference():
+    class RecordingInpainter:
+        def __init__(self):
+            self.masks = []
+
+        def inpaint(self, image, mask):
+            self.masks.append(mask.copy())
+            return np.full_like(image, 255)
+
+    inpainter = RecordingInpainter()
+    pipeline = VisionPipeline(
+        masker=HybridTextMasker(), lama_inpainter=inpainter
+    )
+    image = np.zeros((20, 30, 3), np.uint8)
+    first = _lama_block("first", (2, 3, 8, 9))
+    second = _lama_block("second", (20, 10, 27, 17))
+
+    output, results = pipeline.erase_page(image, [first, second])
+
+    assert len(inpainter.masks) == 1
+    assert np.all(inpainter.masks[0][3:9, 2:8] == 255)
+    assert np.all(inpainter.masks[0][10:17, 20:27] == 255)
+    assert np.all(output[inpainter.masks[0] > 0] == 255)
+    assert np.array_equal(output[inpainter.masks[0] == 0], image[inpainter.masks[0] == 0])
+    assert [result.method for result in results] == [
+        "lama_full_page",
+        "lama_full_page",
+    ]
 
 
 def test_prepare_then_assess_and_erase_generates_one_mask():

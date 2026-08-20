@@ -33,11 +33,13 @@ class VisionPipeline:
         self,
         masker: TextMasker | None = None,
         bubble_segmenter: object | None = None,
+        lama_inpainter: object | None = None,
         config: VisionConfig | None = None,
     ) -> None:
         self.config = config or _load_default_config()
         self.masker = masker or build_text_masker(self.config)
         self.bubble_segmenter = bubble_segmenter
+        self.lama_inpainter = lama_inpainter
 
     def prepare_page(
         self,
@@ -77,6 +79,61 @@ class VisionPipeline:
         self, image: np.ndarray, prepared: PreparedBlock
     ) -> EraseResult:
         return erase_prepared_block(image, prepared)
+
+    def erase_page(
+        self, image: np.ndarray, blocks: list[PreparedBlock]
+    ) -> tuple[np.ndarray, list[EraseResult]]:
+        """Erase a page while batching every complex mask into one inference."""
+        output = image.copy()
+        results: list[EraseResult | None] = [None] * len(blocks)
+        lama_indexes = [
+            index
+            for index, block in enumerate(blocks)
+            if block.erase_method == "lama_full_page"
+        ]
+        if lama_indexes:
+            started = perf_counter()
+            union_mask = np.zeros(image.shape[:2], np.uint8)
+            for index in lama_indexes:
+                union_mask = cv2.bitwise_or(
+                    union_mask, _full_mask(blocks[index], image.shape[:2])
+                )
+            warning = None
+            if self.lama_inpainter is None:
+                restored = cv2.inpaint(image, union_mask, 3, cv2.INPAINT_TELEA)
+                warning = (
+                    "LaMa runtime is not available yet; used Telea compatibility "
+                    "fallback"
+                )
+            else:
+                inpaint = getattr(self.lama_inpainter, "inpaint", None)
+                if inpaint is None:
+                    raise TypeError("lama_inpainter must provide inpaint(image, mask)")
+                restored = inpaint(image.copy(), union_mask)
+                if not isinstance(restored, np.ndarray) or restored.shape != image.shape:
+                    raise ValueError("LaMa output must match the input image shape")
+            output[union_mask > 0] = restored[union_mask > 0]
+            elapsed_ms = (perf_counter() - started) * 1000.0
+            for index in lama_indexes:
+                block_mask = _full_mask(blocks[index], image.shape[:2]) > 0
+                changed_pixels = int(
+                    np.count_nonzero(np.any(image[block_mask] != output[block_mask], axis=1))
+                )
+                results[index] = EraseResult(
+                    method="lama_full_page",
+                    changed_pixels=changed_pixels,
+                    elapsed_ms=elapsed_ms,
+                    warning=warning,
+                )
+
+        for method in ("telea", "flat", "preserve"):
+            for index, block in enumerate(blocks):
+                if block.erase_method == method:
+                    results[index] = erase_prepared_block(output, block)
+
+        if any(result is None for result in results):
+            raise RuntimeError("unsupported erase method in prepared blocks")
+        return output, [result for result in results if result is not None]
 
     def _segment_page(self, image: np.ndarray) -> list[BubbleInstance]:
         if self.bubble_segmenter is None:
@@ -162,9 +219,7 @@ def erase_prepared_block(
             warning=None,
         )
 
-    full_mask = np.zeros(image.shape[:2], dtype=np.uint8)
-    x1, y1, x2, y2 = prepared.mask_result.roi_bbox
-    full_mask[y1:y2, x1:x2] = prepared.mask_result.mask
+    full_mask = _full_mask(prepared, image.shape[:2])
     before = image[full_mask > 0].copy()
     warning = None
 
@@ -184,6 +239,13 @@ def erase_prepared_block(
         elapsed_ms=(perf_counter() - started) * 1000,
         warning=warning,
     )
+
+
+def _full_mask(prepared: PreparedBlock, image_shape: tuple[int, int]) -> np.ndarray:
+    full_mask = np.zeros(image_shape, dtype=np.uint8)
+    x1, y1, x2, y2 = prepared.mask_result.roi_bbox
+    full_mask[y1:y2, x1:x2] = prepared.mask_result.mask
+    return full_mask
 
 
 def _choose_erase_method(
