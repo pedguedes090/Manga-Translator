@@ -110,8 +110,18 @@ class TorchLamaBackend:
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
             use_fp16 = self._fp16_healthy and self._use_fp16(device)
-            output = self._run_model(torch, device, model_input, use_fp16)
-            self.last_precision = "fp16" if use_fp16 else "fp32"
+            try:
+                output = self._run_model(torch, device, model_input, use_fp16)
+            except RuntimeError as exc:
+                if not use_fp16 or not _is_fp16_fft_error(exc):
+                    raise
+                self._fp16_healthy = False
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
+                output = self._run_model(torch, device, model_input, False)
+                self.last_precision = "fp32_fallback"
+            else:
+                self.last_precision = "fp16" if use_fp16 else "fp32"
             if use_fp16 and not bool(torch.isfinite(output).all()):
                 self._fp16_healthy = False
                 if device.type == "cuda":
@@ -288,6 +298,11 @@ def _validate_inputs(
     if mask.shape != image.shape[:2]:
         raise ValueError("LaMa mask shape must match the image")
     return image, mask
+
+
+def _is_fp16_fft_error(exc: RuntimeError) -> bool:
+    message = str(exc).lower()
+    return "cufft" in message and "half precision" in message
 
 
 def _validate_output(output: np.ndarray, expected_shape: tuple[int, ...]) -> np.ndarray:

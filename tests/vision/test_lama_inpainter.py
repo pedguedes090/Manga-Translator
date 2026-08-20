@@ -200,6 +200,42 @@ def test_checkpoint_discovery_prefers_explicit_then_environment(tmp_path, monkey
     assert discover_lama_checkpoint() == environment.resolve()
 
 
+def test_torch_backend_retries_fp32_after_cufft_half_precision_error(monkeypatch):
+    import torch
+
+    class CufftModel:
+        def __init__(self):
+            self.calls = 0
+
+        def eval(self):
+            return self
+
+        def __call__(self, model_input):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError(
+                    "cuFFT only supports dimensions whose sizes are powers of two "
+                    "when computing in half precision"
+                )
+            batch, _, height, width = model_input.shape
+            return torch.full(
+                (batch, 3, height, width), 0.5, device=model_input.device
+            )
+
+    model = CufftModel()
+    backend = TorchLamaBackend(model=model, device="cpu", precision="fp16")
+    monkeypatch.setattr(backend, "_use_fp16", lambda device: True)
+
+    output = backend.inpaint(
+        np.zeros((16, 24, 3), np.uint8),
+        np.full((16, 24), 255, np.uint8),
+    )
+
+    assert model.calls == 2
+    assert np.all(output == 128)
+    assert backend.last_precision == "fp32_fallback"
+
+
 def test_build_lama_inpainter_wires_cuda_and_context_without_loading_model(tmp_path):
     checkpoint = tmp_path / "lama.ckpt"
     checkpoint.write_bytes(b"lazy checkpoint placeholder")
