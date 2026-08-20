@@ -1,10 +1,13 @@
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import cv2
 import numpy as np
 
 from tools.stress_test_comic_pages import run_manifest
+from vision.config import VisionConfig
+from vision.pipeline import VisionPipeline
 
 
 def test_stress_runner_continues_after_page_error_and_hides_paths(tmp_path):
@@ -45,7 +48,18 @@ def test_stress_runner_continues_after_page_error_and_hides_paths(tmp_path):
     )
     config = Path(__file__).resolve().parents[2] / "configs" / "vision.json"
 
-    report = run_manifest(manifest, config, backend="heuristic", erase_pages=1)
+    pipeline = VisionPipeline(
+        config=VisionConfig.load(config), lama_inpainter=None
+    )
+    pipeline.erase_page = Mock(wraps=pipeline.erase_page)
+
+    report = run_manifest(
+        manifest,
+        config,
+        backend="heuristic",
+        erase_pages=1,
+        pipeline=pipeline,
+    )
 
     assert report["page_count"] == 2
     assert report["successful_pages"] == 1
@@ -56,6 +70,7 @@ def test_stress_runner_continues_after_page_error_and_hides_paths(tmp_path):
     assert len(report["dataset_hash"]) == 64
     assert report["rows"][0]["id"] == "good-page"
     assert report["rows"][0]["outside_mask_delta"] == 0
+    assert pipeline.erase_page.call_count == 1
     assert "image" not in report["rows"][0]
     assert report["rows"][1] == {
         "error": "could not decode image",

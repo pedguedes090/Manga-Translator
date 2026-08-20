@@ -28,6 +28,7 @@ def run_manifest(
     config_path: str | Path,
     backend: str,
     erase_pages: int = 0,
+    pipeline: VisionPipeline | None = None,
 ) -> dict[str, object]:
     """Run every page independently and retain errors as report rows."""
     if erase_pages < 0:
@@ -46,11 +47,13 @@ def run_manifest(
         raise ValueError("stress manifest is empty")
 
     config = replace(VisionConfig.load(config_path), mask_backend=backend)
-    pipeline = VisionPipeline(config=config)
+    pipeline = pipeline or VisionPipeline(config=config)
     report_rows: list[dict[str, object]] = []
     method_counts: Counter[str] = Counter()
     decision_counts: Counter[str] = Counter()
     decision_method_counts: Counter[str] = Counter()
+    lama_run_modes: Counter[str] = Counter()
+    lama_calls = 0
     style_counts: dict[str, Counter[str]] = defaultdict(Counter)
     runtimes: list[float] = []
     successful_pages = 0
@@ -79,15 +82,28 @@ def run_manifest(
             outside_mask_delta: int | None = None
             changed_pixels: int | None = None
             warning_count = 0
+            lama_run_mode: str | None = None
+            page_lama_calls = 0
             if page_index < erase_pages:
                 before = image.copy()
-                after = image.copy()
                 union_mask = _union_mask(prepared, image.shape[:2])
-                changed_pixels = 0
-                for prepared_block in prepared:
-                    erase_result = pipeline.erase_block(after, prepared_block)
-                    changed_pixels += erase_result.changed_pixels
-                    warning_count += int(erase_result.warning is not None)
+                after, erase_results = pipeline.erase_page(image, prepared)
+                changed_pixels = sum(
+                    result.changed_pixels for result in erase_results
+                )
+                warning_count = sum(
+                    result.warning is not None for result in erase_results
+                )
+                if per_page_methods.get("lama_full_page", 0):
+                    runtime = pipeline.lama_inpainter
+                    last_run = getattr(runtime, "last_run", None)
+                    if last_run is None:
+                        lama_run_mode = "telea_compatibility"
+                    else:
+                        lama_run_mode = str(last_run.mode)
+                        page_lama_calls = int(last_run.calls)
+                    lama_run_modes[lama_run_mode] += 1
+                    lama_calls += page_lama_calls
                 outside = union_mask == 0
                 outside_mask_delta = int(
                     np.count_nonzero(before[outside] != after[outside])
@@ -111,6 +127,8 @@ def run_manifest(
                         float(np.mean(edge_touches)) if edge_touches else 0.0
                     ),
                     "method_counts": dict(sorted(per_page_methods.items())),
+                    "lama_calls": page_lama_calls,
+                    "lama_run_mode": lama_run_mode,
                     "outside_mask_delta": outside_mask_delta,
                     "page_class": str(row.get("page_class", "unknown")),
                     "status": "ok",
@@ -141,6 +159,8 @@ def run_manifest(
         "erase_pages": min(erase_pages, len(rows)),
         "failed_pages": failed_pages,
         "method_counts": dict(sorted(method_counts.items())),
+        "lama_calls": lama_calls,
+        "lama_run_modes": dict(sorted(lama_run_modes.items())),
         "decision_counts": dict(sorted(decision_counts.items())),
         "decision_method_counts": dict(sorted(decision_method_counts.items())),
         "page_count": len(rows),
@@ -150,7 +170,11 @@ def run_manifest(
             "page_p95_ms": float(np.percentile(runtimes, 95)) if runtimes else None,
             "page_total_ms": float(sum(runtimes)),
         },
-        "runtime_provider": "opencv-cpu",
+        "runtime_provider": (
+            "opencv-cpu+lama-cuda"
+            if pipeline.lama_inpainter is not None
+            else "opencv-cpu"
+        ),
         "styles": {
             style: dict(sorted(counts.items()))
             for style, counts in sorted(style_counts.items())
