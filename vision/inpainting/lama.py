@@ -55,6 +55,7 @@ class TorchLamaBackend:
         self.last_elapsed_ms = 0.0
         self.last_peak_vram_bytes = 0
         self.last_precision = precision
+        self._fp16_healthy = True
         self._torch = None
 
     def _ensure_model_loaded(self):
@@ -108,10 +109,11 @@ class TorchLamaBackend:
 
             if device.type == "cuda":
                 torch.cuda.reset_peak_memory_stats(device)
-            use_fp16 = self._use_fp16(device)
+            use_fp16 = self._fp16_healthy and self._use_fp16(device)
             output = self._run_model(torch, device, model_input, use_fp16)
             self.last_precision = "fp16" if use_fp16 else "fp32"
             if use_fp16 and not bool(torch.isfinite(output).all()):
+                self._fp16_healthy = False
                 if device.type == "cuda":
                     torch.cuda.empty_cache()
                 output = self._run_model(torch, device, model_input, False)

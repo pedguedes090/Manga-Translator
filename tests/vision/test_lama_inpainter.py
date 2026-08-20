@@ -180,6 +180,14 @@ def test_torch_backend_retries_fp32_when_fp16_output_is_not_finite(monkeypatch):
     assert np.all(output == 128)
     assert backend.last_precision == "fp32_fallback"
 
+    backend.inpaint(
+        np.zeros((16, 16, 3), np.uint8),
+        np.full((16, 16), 255, np.uint8),
+    )
+
+    assert model.calls == 3
+    assert backend.last_precision == "fp32"
+
 
 def test_checkpoint_discovery_prefers_explicit_then_environment(tmp_path, monkeypatch):
     explicit = tmp_path / "explicit.ckpt"
