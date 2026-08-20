@@ -2,12 +2,16 @@
 Text rendering for manga/comic translation.
 Supports automatic background-aware text coloring and outline rendering.
 """
+from dataclasses import asdict
+
 from PIL import Image, ImageDraw, ImageFont
 import numpy as np
 import cv2
 import math
 import os
 import re
+
+from vision.region_analysis import _analyze_region_with_diagnostics
 
 _font_cache = {}
 _font_coverage_cache = {}
@@ -570,240 +574,17 @@ def _decide_skip_render(text, sfx_info, analysis, source_lang='ja'):
 
 
 def _analyze_region(image, bbox):
-    """
-    Analyze a region of the image to determine background properties.
-    Uses vectorized numpy operations for speed.
-
-    Specifically detects speech bubble boundaries by comparing
-    border (outside/edge) pixels with interior (inside ring) pixels.
-
-    Returns dict with:
-        mean_color: (B, G, R) average interior color
-        mean_intensity: float 0-255
-        intensity_std: float — interior uniformity
-        edge_score: float — how complex the background is
-        dominant_tone: 'dark' | 'light' | 'mid'
-        uniformity: 'uniform' | 'textured' | 'complex'
-        bubble_context: 'in_bubble' | 'on_artwork_dark' | 'on_artwork_light' | 'on_artwork_mixed'
-        border_interior_contrast: float — how strong the bubble border is
-    """
-    x1, y1, x2, y2 = [max(0, int(v)) for v in bbox]
-    h_img, w_img = image.shape[:2]
-    x2 = min(x2, w_img)
-    y2 = min(y2, h_img)
-    if x2 <= x1 or y2 <= y1:
+    """Return legacy dict analysis backed by the shared typed implementation."""
+    analysis, diagnostics = _analyze_region_with_diagnostics(image, tuple(bbox))
+    if analysis is None or diagnostics is None:
         return None
 
-    h, w = y2 - y1, x2 - x1
+    legacy = asdict(analysis)
+    legacy["mean_bgr"] = diagnostics.mean_bgr
+    legacy["border_interior_contrast"] = diagnostics.border_interior_contrast
+    legacy["is_bubble"] = diagnostics.is_bubble
+    return legacy
 
-    # --- Border sampling (just OUTSIDE the bbox) ---
-    margin = max(2, min(h, w) // 8)
-    border_samples = []
-
-    # Top
-    by1 = max(0, y1 - margin)
-    if by1 < y1:
-        border_samples.append(image[by1:y1, x1:x2])
-    # Bottom
-    by2 = min(h_img, y2 + margin)
-    if y2 < by2:
-        border_samples.append(image[y2:by2, x1:x2])
-    # Left
-    bx1 = max(0, x1 - margin)
-    if bx1 < x1:
-        border_samples.append(image[y1:y2, bx1:x1])
-    # Right
-    bx2 = min(w_img, x2 + margin)
-    if x2 < bx2:
-        border_samples.append(image[y1:y2, x2:bx2])
-
-    # --- Interior ring (outer 1/12 inside bbox, excludes center text area) ---
-    ring_thickness = max(2, min(h, w) // 12)
-    interior_samples = []
-    # Top ring
-    ty2 = min(y1 + ring_thickness, y2)
-    interior_samples.append(image[y1:ty2, x1:x2])
-    # Bottom ring
-    by1_i = max(y1, y2 - ring_thickness)
-    interior_samples.append(image[by1_i:y2, x1:x2])
-    # Left ring (excluding already sampled top/bottom strips)
-    lx2 = min(x1 + ring_thickness, x2)
-    if ty2 < by1_i:
-        interior_samples.append(image[ty2:by1_i, x1:lx2])
-    # Right ring
-    rx1 = max(x1, x2 - ring_thickness)
-    if ty2 < by1_i:
-        interior_samples.append(image[ty2:by1_i, rx1:x2])
-
-    # --- Edge zone sampling (transition zone: outer 2px of bbox) ---
-    # This captures the dark bubble outline if it's clipped by OCR
-    edge_thickness = max(1, min(h, w) // 30)
-    edge_samples = []
-    # Top edge
-    ey2 = min(y1 + edge_thickness, y2)
-    edge_samples.append(image[y1:ey2, x1:x2])
-    # Bottom edge
-    eby1 = max(y1, y2 - edge_thickness)
-    edge_samples.append(image[eby1:y2, x1:x2])
-    # Left edge
-    elx2 = min(x1 + edge_thickness, x2)
-    if ey2 < eby1:
-        edge_samples.append(image[ey2:eby1, x1:elx2])
-    # Right edge
-    erx1 = max(x1, x2 - edge_thickness)
-    if ey2 < eby1:
-        edge_samples.append(image[ey2:eby1, erx1:x2])
-
-    # --- Compute statistics ---
-    if border_samples:
-        border_pixels = np.concatenate([bs.reshape(-1, 3) for bs in border_samples], axis=0)
-    else:
-        border_pixels = None
-
-    if interior_samples:
-        interior_pixels = np.concatenate([ins.reshape(-1, 3) for ins in interior_samples], axis=0)
-    else:
-        interior_pixels = None
-
-    if edge_samples:
-        edge_pixels = np.concatenate([es.reshape(-1, 3) for es in edge_samples], axis=0)
-    else:
-        edge_pixels = None
-
-    # --- Interior MEDIAN (robust against text pixels polluting the sample) ---
-    if interior_pixels is not None and len(interior_pixels) >= 10:
-        median_interior_bgr = np.median(interior_pixels, axis=0).astype(np.float32)
-    elif edge_pixels is not None and len(edge_pixels) >= 10:
-        median_interior_bgr = np.median(edge_pixels, axis=0).astype(np.float32)
-    else:
-        roi = image[y1:y2, x1:x2]
-        median_interior_bgr = np.median(roi.reshape(-1, 3), axis=0).astype(np.float32)
-
-    # Fill color = median interior (ignores dark text pixels)
-    mean_intensity = float(0.114 * median_interior_bgr[0] + 0.587 * median_interior_bgr[1] + 0.299 * median_interior_bgr[2])
-
-    # --- Interior uniformity (MAD = Median Absolute Deviation, robust) ---
-    if interior_pixels is not None and len(interior_pixels) >= 20:
-        # Convert to grayscale intensity per pixel for MAD computation
-        interior_gray = (0.114 * interior_pixels[:, 0].astype(np.float64) +
-                         0.587 * interior_pixels[:, 1].astype(np.float64) +
-                         0.299 * interior_pixels[:, 2].astype(np.float64))
-        median_gray = np.median(interior_gray)
-        mad = float(np.median(np.abs(interior_gray - median_gray)))
-        intensity_std = mad * 1.4826  # scale MAD to approximate std for consistent thresholds
-    else:
-        roi = image[y1:y2, x1:x2].reshape(-1, 3)
-        roi_gray = (0.114 * roi[:, 0].astype(np.float64) +
-                    0.587 * roi[:, 1].astype(np.float64) +
-                    0.299 * roi[:, 2].astype(np.float64))
-        mad = float(np.median(np.abs(roi_gray - np.median(roi_gray))))
-        intensity_std = mad * 1.4826
-
-    # --- Edge density (Sobel) ---
-    if h >= 17 and w >= 17:
-        gray_patch = cv2.cvtColor(image[y1:y2, x1:x2], cv2.COLOR_BGR2GRAY)
-        scale = max(1, min(w, h) // 80)
-        small = gray_patch[::scale, ::scale]
-        gx = cv2.Sobel(small, cv2.CV_32F, 1, 0, ksize=3)
-        gy = cv2.Sobel(small, cv2.CV_32F, 0, 1, ksize=3)
-        edge_score = float(np.mean(np.sqrt(gx**2 + gy**2)))
-    else:
-        edge_score = 0.0
-
-    # --- 🌟 BUBBLE BOUNDARY DETECTION ---
-    # Compare: Border (outside) vs Edge (inside border) vs Interior
-    # A speech bubble has: dark border → light interior transition
-
-    if border_pixels is not None and len(border_pixels) >= 10:
-        border_mean = np.mean(border_pixels, axis=0).astype(np.float32)
-        border_intensity = float(0.114 * border_mean[0] + 0.587 * border_mean[1] + 0.299 * border_mean[2])
-    else:
-        border_intensity = mean_intensity
-
-    if edge_pixels is not None and len(edge_pixels) >= 10:
-        edge_mean = np.mean(edge_pixels, axis=0).astype(np.float32)
-        edge_intensity = float(0.114 * edge_mean[0] + 0.587 * edge_mean[1] + 0.299 * edge_mean[2])
-        edge_std = float(np.mean(np.std(edge_pixels, axis=0)))
-    else:
-        edge_intensity = mean_intensity
-        edge_std = intensity_std
-
-    # Contrast between border and interior
-    border_interior_contrast = abs(border_intensity - mean_intensity)
-
-    # Detect bubble boundary in BOTH directions:
-    # - Light bubble: dark outline → light interior (edge_darker)
-    # - Dark bubble: light outline → dark interior (edge_lighter)
-    edge_darker_than_interior = (mean_intensity - edge_intensity) > 25
-    edge_lighter_than_interior = (edge_intensity - mean_intensity) > 25
-    edge_has_strong_outline = edge_std > 25 and abs(edge_intensity - mean_intensity) > 15
-
-    # Detect in-bubble: strong contrast between border and interior
-    # AND interior is relatively uniform (bubble fill)
-    bubble_confidence = 0.0
-
-    # Border-to-interior contrast (what surrounds the bubble)
-    if border_interior_contrast > 40:
-        bubble_confidence += 0.35
-    if border_interior_contrast > 20:
-        bubble_confidence += 0.15
-
-    # Edge zone has strong transition (the bubble outline itself)
-    if edge_darker_than_interior or edge_lighter_than_interior:
-        bubble_confidence += 0.25
-    if edge_has_strong_outline:
-        bubble_confidence += 0.20
-
-    # Interior uniformity (bubble fill is solid)
-    if intensity_std < 20:
-        bubble_confidence += 0.20
-    elif intensity_std < 35:
-        bubble_confidence += 0.10
-
-    # Edge density penalty: high edge_score = artwork, not bubble
-    if edge_score < 20:
-        bubble_confidence += 0.15
-    elif edge_score > 45:
-        bubble_confidence -= 0.15
-
-    is_bubble = bubble_confidence >= 0.55
-
-    # --- Classify bubble context ---
-    if is_bubble:
-        bubble_context = 'in_bubble'
-    elif mean_intensity < 90:
-        bubble_context = 'on_artwork_dark'
-    elif mean_intensity > 170:
-        bubble_context = 'on_artwork_light'
-    else:
-        bubble_context = 'on_artwork_mixed'
-
-    # --- Uniformity ---
-    if intensity_std < 18:
-        uniformity = 'uniform'
-    elif intensity_std < 50 and edge_score < 50:
-        uniformity = 'textured'
-    else:
-        uniformity = 'complex'
-
-    if mean_intensity < 80:
-        dominant_tone = 'dark'
-    elif mean_intensity > 170:
-        dominant_tone = 'light'
-    else:
-        dominant_tone = 'mid'
-
-    return {
-        'mean_bgr': median_interior_bgr,
-        'mean_intensity': mean_intensity,
-        'intensity_std': float(intensity_std),
-        'edge_score': float(edge_score),
-        'dominant_tone': dominant_tone,
-        'uniformity': uniformity,
-        'bubble_context': bubble_context,
-        'border_interior_contrast': float(border_interior_contrast),
-        'is_bubble': is_bubble,
-    }
 
 
 def _decide_text_appearance(analysis):
