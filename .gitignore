@@ -11,6 +11,9 @@ venv/
 debug_outputs/
 temp_sessions/
 audit-current-project/
+datasets/generated/
+reports/vision/
+models/cache/
 server_*.log
 test_result_phase1.png
 
