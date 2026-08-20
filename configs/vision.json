@@ -1,0 +1,35 @@
+{
+  "profile": "cuda",
+  "mask_backend": "auto",
+  "allow_cpu_fallback": true,
+  "text_mask": {
+    "input_size": 512,
+    "crop_padding_ratio": 0.12,
+    "prob_high": 0.62,
+    "prob_low": 0.34,
+    "max_coverage": 0.65,
+    "max_bubble_border_overlap": 0.02,
+    "dilation_min_px": 1,
+    "dilation_max_px": 4
+  },
+  "bubble": {
+    "enabled": true,
+    "match_confidence": 0.45,
+    "safe_border_px": 3
+  },
+  "inpaint": {
+    "strategy": "auto",
+    "flat_max_texture_std": 12.0,
+    "telea_radius": 3,
+    "lama_full_resolution": true,
+    "precision": "fp16",
+    "oom_context_min_px": 256,
+    "oom_context_max_mask_ratio": 0.08
+  },
+  "safety": {
+    "manual_review_on_uncertain": true
+  },
+  "debug": {
+    "save_artifacts": false
+  }
+}
