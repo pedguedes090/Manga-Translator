@@ -6,10 +6,16 @@ import argparse
 from collections import defaultdict
 import json
 from pathlib import Path
+import sys
 from typing import Callable
 
 import cv2
 import numpy as np
+
+# Support the documented ``python tools/evaluate_masks.py`` entrypoint.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(_PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PROJECT_ROOT))
 
 from vision.metrics import compute_mask_metrics
 
