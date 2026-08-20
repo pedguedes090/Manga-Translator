@@ -11,6 +11,7 @@ from .base import BaseTranslator
 
 MAX_BATCH_SIZE = 30  # Max texts per single LLM API call
 MAX_PARALLEL_CHUNKS = 4  # Max concurrent chunk requests
+MAX_BATCH_RETRIES = 2
 
 
 class LocalLLMTranslator(BaseTranslator):
@@ -201,6 +202,10 @@ Rules:
         source_name = self.LANG_NAMES.get(source, "Japanese")
         target_name = self.LANG_NAMES.get(target, "English")
         style_text = self._build_style_instructions()
+        indexed_payload = [
+            {"id": index, "text": text}
+            for index, text in enumerate(texts_to_translate)
+        ]
 
         prompt = f"""Dịch manga/comic từ {source_name} sang {target_name}.
 
@@ -217,25 +222,30 @@ TIẾNG VIỆT:
 - TRÁNH dịch kiểu sách giáo khoa{style_text}
 
 Input:
-{json.dumps(texts_to_translate, ensure_ascii=False)}
+{json.dumps(indexed_payload, ensure_ascii=False)}
 
-        Trả về JSON array với bản dịch theo ĐÚNG THỨ TỰ.
-Example: ["translation 1", "translation 2"]"""
+Trả về đủ CHÍNH XÁC {len(texts_to_translate)} phần tử. Giữ nguyên `id` để không làm rơi câu.
+Chỉ trả về JSON theo format:
+[{{"id": 0, "translation": "bản dịch 0"}}, {{"id": 1, "translation": "bản dịch 1"}}]"""
 
-        try:
-            result_text = self._post_chat(prompt, timeout=60)
-            translations = self._parse_json_array(result_text)
+        for attempt in range(1, MAX_BATCH_RETRIES + 1):
+            try:
+                result_text = self._post_chat(prompt, timeout=60)
+                parsed = self._parse_json_array(result_text)
+                return _normalize_batch_translations(
+                    parsed, len(texts_to_translate)
+                )
+            except Exception as e:
+                print(
+                    f"Local LLM batch attempt {attempt}/{MAX_BATCH_RETRIES} "
+                    f"failed: {e}"
+                )
 
-            if len(translations) != len(texts_to_translate):
-                print(f"Warning: Expected {len(texts_to_translate)} translations, got {len(translations)}. Falling back to single translations.")
-                # Don't silently pad/truncate — fall back to individual translations for correctness
-                return [self.translate_single(t, source, target) for t in texts_to_translate]
-
-            return translations
-
-        except Exception as e:
-            print(f"Local LLM batch translation error: {e}")
-            return [self.translate_single(t, source, target) for t in texts_to_translate]
+        print(
+            "Local LLM batch remained invalid; keeping original texts "
+            "instead of losing shared context to single requests."
+        )
+        return list(texts_to_translate)
 
     def test_connection(self) -> bool:
         try:
@@ -254,3 +264,36 @@ Example: ["translation 1", "translation 2"]"""
         except:
             pass
         return self.MODELS
+
+
+def _normalize_batch_translations(value: object, expected_count: int) -> List[str]:
+    if not isinstance(value, list):
+        raise ValueError("batch response must be a JSON array")
+    if all(isinstance(item, str) for item in value):
+        if len(value) != expected_count:
+            raise ValueError(
+                f"Expected {expected_count} translations, got {len(value)}"
+            )
+        return list(value)
+
+    translations: dict[int, str] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError("batch items must all be strings or indexed objects")
+        item_id = item.get("id")
+        translation = item.get("translation")
+        if (
+            not isinstance(item_id, int)
+            or isinstance(item_id, bool)
+            or not isinstance(translation, str)
+            or item_id in translations
+        ):
+            raise ValueError("batch response contains an invalid or duplicate id")
+        translations[item_id] = translation
+
+    expected_ids = set(range(expected_count))
+    if set(translations) != expected_ids:
+        raise ValueError(
+            f"Expected ids 0..{expected_count - 1}, got {sorted(translations)}"
+        )
+    return [translations[index] for index in range(expected_count)]

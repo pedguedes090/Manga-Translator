@@ -166,6 +166,53 @@ def test_gemini_batch_returns_original_texts_after_all_keys_fail():
     assert translator.exhausted_api_keys == {"bad-1", "bad-2"}
 
 
+def test_local_llm_retries_the_whole_batch_when_one_translation_is_missing():
+    from translator.local_llm_translator import LocalLLMTranslator
+
+    class RepairingLocalLLM(LocalLLMTranslator):
+        def __init__(self):
+            super().__init__()
+            self.batch_calls = 0
+
+        def _post_chat(self, prompt, timeout):
+            self.batch_calls += 1
+            count = 18 if self.batch_calls == 1 else 19
+            return json.dumps([f"dịch {index}" for index in range(count)])
+
+        def translate_single(self, text, source="ja", target="en"):
+            raise AssertionError("a malformed batch must not lose shared context")
+
+    translator = RepairingLocalLLM()
+    texts = [f"source {index}" for index in range(19)]
+
+    translated = translator.translate_batch(texts, source="ko", target="vi")
+
+    assert translated == [f"dịch {index}" for index in range(19)]
+    assert translator.batch_calls == 2
+
+
+def test_local_llm_maps_indexed_batch_response_back_to_input_order():
+    from translator.local_llm_translator import LocalLLMTranslator
+
+    class IndexedLocalLLM(LocalLLMTranslator):
+        def _post_chat(self, prompt, timeout):
+            return json.dumps(
+                [
+                    {"id": 2, "translation": "ba"},
+                    {"id": 0, "translation": "một"},
+                    {"id": 1, "translation": "hai"},
+                ]
+            )
+
+    translator = IndexedLocalLLM()
+
+    translated = translator.translate_batch(
+        ["one", "two", "three"], source="en", target="vi"
+    )
+
+    assert translated == ["một", "hai", "ba"]
+
+
 def test_gemini_default_client_factory_requires_google_genai(monkeypatch):
     from translator.gemini_translator import GeminiTranslator
 
