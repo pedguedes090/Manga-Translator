@@ -19,6 +19,7 @@ from vision.maskers.heuristic import (
     filter_text_mask_components as _vision_filter_text_mask_components,
     remove_screentone_dots as _vision_remove_screentone_dots,
 )
+from vision.pipeline import erase_prepared_block
 
 _font_cache = {}
 _font_coverage_cache = {}
@@ -826,8 +827,30 @@ def _erase_strokes_only(image, x1, y1, x2, y2, fill_color, appearance, inner_rec
     return 'stroke-fill', coverage
 
 
-def assess_erasability(image, bbox, text=None, source_lang='ja'):
+def assess_erasability(image, bbox, text=None, source_lang='ja', prepared=None):
     """Return whether an OCR block is safe to erase without mutating image."""
+    if prepared is not None:
+        decision = prepared.decision
+        region = prepared.region
+        mask_result = prepared.mask_result
+        return {
+            'safe': decision.safe,
+            'reason': decision.reason,
+            'score': decision.score,
+            'analysis': {
+                'bubble_context': region.bubble_context,
+                'uniformity': region.uniformity,
+                'intensity_std': region.intensity_std,
+                'edge_score': region.edge_score,
+                'mask_coverage': mask_result.coverage,
+                'raw_mask_coverage': mask_result.coverage,
+                'edge_component_coverage': mask_result.edge_touch_ratio,
+                'bg_texture_std': region.texture_std,
+                'fill_luma': region.mean_intensity,
+                'is_sfx': False,
+            },
+        }
+
     if image is None or bbox is None or len(bbox) < 4:
         return {
             'safe': False,
@@ -1031,7 +1054,7 @@ def assess_erasability(image, bbox, text=None, source_lang='ja'):
     }
 
 
-def erase_text_region(image, bbox, source_lang='ja'):
+def erase_text_region(image, bbox, source_lang='ja', prepared=None):
     """
     Analyze surrounding background and fill the bbox area with appropriate color.
     Uses inpainting for complex backgrounds, flat fill for uniform ones.
@@ -1044,6 +1067,23 @@ def erase_text_region(image, bbox, source_lang='ja'):
     Returns:
         tuple: (image, text_color_rgb, appearance_info)
     """
+    if prepared is not None:
+        appearance = _decide_text_appearance(asdict(prepared.region))
+        erase_result = erase_prepared_block(image, prepared)
+        method_names = {
+            'preserve': 'no-text-mask',
+            'flat': 'stroke-fill-sampled',
+            'telea': 'stroke-inpaint',
+            'lama_full_page': 'stroke-inpaint',
+        }
+        appearance['erase_method'] = method_names[erase_result.method]
+        appearance['erase_mask_coverage'] = prepared.mask_result.coverage
+        if erase_result.warning:
+            appearance['erase_warning'] = erase_result.warning
+        text_bgr = appearance['text_color']
+        text_color_rgb = (text_bgr[2], text_bgr[1], text_bgr[0])
+        return image, text_color_rgb, appearance
+
     x1, y1, x2, y2 = [max(0, int(v)) for v in bbox]
     h_img, w_img = image.shape[:2]
     x2 = min(x2, w_img)
