@@ -12,6 +12,13 @@ import os
 import re
 
 from vision.region_analysis import _analyze_region_with_diagnostics
+from vision.maskers.heuristic import (
+    build_text_stroke_mask as _vision_build_text_stroke_mask,
+    edge_touching_component_coverage as _vision_edge_touching_component_coverage,
+    filter_components_outside_inner as _vision_filter_components_outside_inner,
+    filter_text_mask_components as _vision_filter_text_mask_components,
+    remove_screentone_dots as _vision_remove_screentone_dots,
+)
 
 _font_cache = {}
 _font_coverage_cache = {}
@@ -711,217 +718,24 @@ def _luminance_bgr(color):
 
 
 def _filter_text_mask_components(mask):
-    if mask is None or mask.size == 0:
-        return mask
-
-    h, w = mask.shape[:2]
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
-    filtered = np.zeros_like(mask)
-    max_area = max(12, int(h * w * 0.65))
-
-    for label in range(1, num_labels):
-        x, y, comp_w, comp_h, area = stats[label]
-        if area < 2:
-            continue
-        if area > max_area:
-            continue
-        if comp_w > w * 0.96 and comp_h > h * 0.55:
-            continue
-        filtered[labels == label] = 255
-
-    return filtered
+    return _vision_filter_text_mask_components(mask)
 
 
 def _build_text_stroke_mask(roi, fill_color, appearance):
-    """Detect only the original ink strokes inside an OCR bbox."""
-    if roi is None or roi.size == 0:
-        return None
-
-    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    fill_gray = _luminance_bgr(fill_color)
-    intensity_std = float(appearance.get('intensity_std', 0) or 0)
-    threshold_gap = max(14, min(42, int(18 + intensity_std * 0.25)))
-
-    roi_float = roi.astype(np.float32)
-    fill = np.array(fill_color, dtype=np.float32)
-    color_dist = np.sqrt(np.sum((roi_float - fill) ** 2, axis=2))
-    preserve_uniform_bright_halo = False
-
-    if fill_gray >= 150:
-        dark_strokes = gray < (fill_gray - threshold_gap)
-        color_outliers = (color_dist > 45) & (gray < fill_gray - max(10, threshold_gap // 2))
-        mask = dark_strokes | color_outliers
-        if fill_gray < 235:
-            bright_halo = (gray > fill_gray + max(18, threshold_gap // 2)) & (color_dist > 28)
-            mask |= bright_halo
-            dark_coverage = np.count_nonzero(dark_strokes) / max(mask.size, 1)
-            halo_coverage = np.count_nonzero(bright_halo) / max(mask.size, 1)
-            preserve_uniform_bright_halo = (
-                appearance.get('uniformity') == 'uniform'
-                and intensity_std < 10
-                and dark_coverage > 0.04
-                and halo_coverage > 0.04
-            )
-
-        base_coverage = np.count_nonzero(mask) / max(mask.size, 1)
-        if base_coverage < 0.12 and min(gray.shape[:2]) >= 15:
-            block_size = max(15, (min(gray.shape[:2]) // 3) | 1)
-            block_size = min(block_size, 45)
-            adaptive = cv2.adaptiveThreshold(
-                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY_INV, block_size, 9
-            ) > 0
-            mask |= adaptive & (gray < fill_gray - max(14, threshold_gap // 2)) & (color_dist > 20)
-    elif fill_gray <= 105:
-        light_strokes = gray > (fill_gray + threshold_gap)
-        color_outliers = (color_dist > 38) & (gray > fill_gray - 8)
-        mask = light_strokes | color_outliers
-    else:
-        mask = color_dist > 45
-
-    mask = mask.astype(np.uint8) * 255
-
-    coverage = np.count_nonzero(mask) / max(mask.size, 1)
-    if coverage > 0.42 and not preserve_uniform_bright_halo:
-        if fill_gray >= 150:
-            mask = (gray < fill_gray - max(26, threshold_gap + 8)).astype(np.uint8) * 255
-        elif fill_gray <= 105:
-            mask = (gray > fill_gray + max(26, threshold_gap + 8)).astype(np.uint8) * 255
-        else:
-            mask = (color_dist > 65).astype(np.uint8) * 255
-
-    kernel = np.array([[0, 1, 0],
-                       [1, 1, 1],
-                       [0, 1, 0]], dtype=np.uint8)
-    mask = _filter_text_mask_components(mask)
-    mask_coverage = np.count_nonzero(mask) / max(mask.size, 1)
-    if not (preserve_uniform_bright_halo and mask_coverage > 0.64):
-        mask = cv2.dilate(mask, kernel, iterations=1)
-        dilated_coverage = np.count_nonzero(mask) / max(mask.size, 1)
-        if (
-            preserve_uniform_bright_halo
-            and mask_coverage > 0.50
-            and dilated_coverage < 0.66
-        ):
-            mask = cv2.dilate(mask, kernel, iterations=1)
-
-    final_coverage = np.count_nonzero(mask) / max(mask.size, 1)
-    if final_coverage > 0.38 and not preserve_uniform_bright_halo:
-        if fill_gray >= 150:
-            mask = (gray < fill_gray - max(28, threshold_gap + 8)).astype(np.uint8) * 255
-        elif fill_gray <= 105:
-            mask = (gray > fill_gray + max(28, threshold_gap + 8)).astype(np.uint8) * 255
-        else:
-            mask = (color_dist > 70).astype(np.uint8) * 255
-        mask = _filter_text_mask_components(mask)
-        mask = cv2.dilate(mask, kernel, iterations=1)
-
-    return mask
+    return _vision_build_text_stroke_mask(roi, fill_color, appearance)
 
 
 def _filter_components_outside_inner(mask, inner_rect, min_overlap=0.30):
-    """Drop mask components that live mostly in the padding strip around the
-    original OCR bbox (likely bubble borders / artwork), keep components whose
-    bulk lies inside the original bbox (text strokes, incl. their overflow)."""
-    if mask is None or inner_rect is None:
-        return mask
-    ix1, iy1, ix2, iy2 = inner_rect
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
-    inner = np.zeros_like(mask, dtype=bool)
-    inner[iy1:iy2, ix1:ix2] = True
-    filtered = np.zeros_like(mask)
-    for label in range(1, num_labels):
-        x, y, comp_w, comp_h, area = stats[label]
-        if area <= 0:
-            continue
-        touches_roi_edge = (
-            x <= 1 or y <= 1
-            or x + comp_w >= mask.shape[1] - 1
-            or y + comp_h >= mask.shape[0] - 1
-        )
-        comp = labels == label
-        overlap = np.count_nonzero(comp & inner) / float(area)
-        mask_h, mask_w = mask.shape[:2]
-        touches_left_or_right = x <= 1 or x + comp_w >= mask_w - 1
-        touches_top_or_bottom = y <= 1 or y + comp_h >= mask_h - 1
-        thin_vertical_border = (
-            touches_left_or_right
-            and comp_w <= max(4, mask_w * 0.06)
-            and comp_h >= mask_h * 0.45
-        )
-        thin_horizontal_border = (
-            touches_top_or_bottom
-            and comp_h <= max(4, mask_h * 0.06)
-            and comp_w >= mask_w * 0.45
-        )
-        likely_border = thin_vertical_border or thin_horizontal_border
-        likely_text_touching_edge = (
-            touches_roi_edge
-            and overlap >= 0.85
-            and not likely_border
-            and (
-                comp_w >= mask_w * 0.08
-                or comp_h >= mask_h * 0.20
-                or area >= mask.size * 0.01
-            )
-        )
-        likely_wide_text_touching_side = (
-            touches_roi_edge
-            and overlap >= 0.85
-            and comp_w >= mask_w * 0.35
-            and comp_h >= mask.shape[0] * 0.20
-        )
-        if (
-            touches_roi_edge
-            and not likely_text_touching_edge
-            and not likely_wide_text_touching_side
-        ):
-            continue
-        if overlap >= min_overlap:
-            filtered[comp] = 255
-    return filtered
+    return _vision_filter_components_outside_inner(mask, inner_rect, min_overlap)
 
 
 def _remove_screentone_dots(mask, tiny_area=30, min_count=40, min_ratio=0.6):
-    """Remove halftone/screentone dot grids mistakenly captured as strokes.
-    Texture dots appear as a large number of uniformly tiny components; real
-    text produces far fewer small components (punctuation only)."""
-    if mask is None or np.count_nonzero(mask) == 0:
-        return mask
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
-    if num_labels <= 1:
-        return mask
-    areas = stats[1:, cv2.CC_STAT_AREA]
-    tiny_labels = [i + 1 for i, a in enumerate(areas) if a <= tiny_area]
-    total = len(areas)
-    if len(tiny_labels) >= min_count and len(tiny_labels) / total >= min_ratio:
-        filtered = mask.copy()
-        tiny_set = np.isin(labels, tiny_labels)
-        filtered[tiny_set] = 0
-        return filtered
-    return mask
+    return _vision_remove_screentone_dots(mask, tiny_area, min_count, min_ratio)
 
 
 def _edge_touching_component_coverage(mask):
-    if mask is None or np.count_nonzero(mask) == 0:
-        return 0.0
+    return _vision_edge_touching_component_coverage(mask)
 
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
-    if num_labels <= 1:
-        return 0.0
-
-    edge_pixels = 0
-    for label in range(1, num_labels):
-        x, y, comp_w, comp_h, area = stats[label]
-        touches_roi_edge = (
-            x <= 1 or y <= 1
-            or x + comp_w >= mask.shape[1] - 1
-            or y + comp_h >= mask.shape[0] - 1
-        )
-        if touches_roi_edge:
-            edge_pixels += int(area)
-
-    return edge_pixels / float(max(mask.size, 1))
 
 
 def _erase_strokes_only(image, x1, y1, x2, y2, fill_color, appearance, inner_rect=None):
