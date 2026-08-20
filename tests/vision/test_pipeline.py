@@ -1,3 +1,4 @@
+from dataclasses import replace
 from unittest.mock import Mock
 
 import cv2
@@ -158,6 +159,30 @@ def test_erase_page_unions_complex_masks_for_one_inference():
         "lama_full_page",
         "lama_full_page",
     ]
+
+
+def test_erase_page_unions_ordinary_masks_for_one_telea_call(monkeypatch):
+    masks = []
+
+    def recording_inpaint(image, mask, radius, method):
+        masks.append(mask.copy())
+        return np.full_like(image, 255)
+
+    monkeypatch.setattr(cv2, "inpaint", recording_inpaint)
+    pipeline = VisionPipeline(masker=HybridTextMasker(), lama_inpainter=None)
+    image = np.zeros((20, 30, 3), np.uint8)
+    first = replace(_lama_block("first", (2, 3, 8, 9)), erase_method="telea")
+    second = replace(
+        _lama_block("second", (20, 10, 27, 17)), erase_method="telea"
+    )
+
+    output, results = pipeline.erase_page(image, [first, second])
+
+    assert len(masks) == 1
+    assert np.all(masks[0][3:9, 2:8] == 255)
+    assert np.all(masks[0][10:17, 20:27] == 255)
+    assert np.all(output[masks[0] > 0] == 255)
+    assert [result.method for result in results] == ["telea", "telea"]
 
 
 def test_erase_page_reports_runtime_fallback_warning():

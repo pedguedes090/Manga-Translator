@@ -155,7 +155,47 @@ class VisionPipeline:
                     warning=warning,
                 )
 
-        for method in ("telea", "flat", "preserve"):
+        telea_indexes = [
+            index
+            for index, block in enumerate(blocks)
+            if block.erase_method == "telea"
+        ]
+        if telea_indexes:
+            started = perf_counter()
+            union_mask = np.zeros(image.shape[:2], np.uint8)
+            block_masks: dict[int, np.ndarray] = {}
+            before_pixels: dict[int, np.ndarray] = {}
+            for index in telea_indexes:
+                block_mask = _full_mask(blocks[index], image.shape[:2]) > 0
+                block_masks[index] = block_mask
+                before_pixels[index] = output[block_mask].copy()
+                union_mask[block_mask] = 255
+            restored = cv2.inpaint(
+                output,
+                union_mask,
+                self.config.inpaint.telea_radius,
+                cv2.INPAINT_TELEA,
+            )
+            output[union_mask > 0] = restored[union_mask > 0]
+            elapsed_ms = (perf_counter() - started) * 1000.0
+            for index in telea_indexes:
+                block_mask = block_masks[index]
+                changed_pixels = int(
+                    np.count_nonzero(
+                        np.any(
+                            before_pixels[index] != output[block_mask],
+                            axis=1,
+                        )
+                    )
+                )
+                results[index] = EraseResult(
+                    method="telea",
+                    changed_pixels=changed_pixels,
+                    elapsed_ms=elapsed_ms,
+                    warning=None,
+                )
+
+        for method in ("flat", "preserve"):
             for index, block in enumerate(blocks):
                 if block.erase_method == method:
                     results[index] = erase_prepared_block(output, block)
