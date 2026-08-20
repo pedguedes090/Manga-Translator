@@ -10,6 +10,7 @@ def test_default_config_has_cuda_full_resolution_profile():
 
     assert config.profile == "cuda"
     assert config.inpaint.lama_full_resolution is True
+    assert config.inpaint.precision == "fp32"
     assert config.text_mask.prob_low < config.text_mask.prob_high
     assert len(config.config_hash()) == 64
 
@@ -39,4 +40,14 @@ def test_config_rejects_string_rollout_gates(tmp_path):
     )
 
     with pytest.raises(ValueError, match="hybrid_gate_passed must be boolean"):
+        VisionConfig.load(path)
+
+
+def test_config_rejects_unknown_lama_precision(tmp_path):
+    path = tmp_path / "vision.json"
+    path.write_text(
+        json.dumps({"inpaint": {"precision": "int8"}}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="inpaint precision must be fp16 or fp32"):
         VisionConfig.load(path)

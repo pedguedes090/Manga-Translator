@@ -26,7 +26,7 @@
     "flat_max_texture_std": 12.0,
     "telea_radius": 3,
     "lama_full_resolution": true,
-    "precision": "fp16",
+    "precision": "fp32",
     "oom_context_min_px": 256,
     "oom_context_max_mask_ratio": 0.08
   },

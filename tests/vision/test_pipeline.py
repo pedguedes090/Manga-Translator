@@ -213,7 +213,7 @@ def test_pipeline_auto_builds_lama_runtime_from_cuda_config(monkeypatch):
     assert pipeline.lama_inpainter is runtime
     builder.assert_called_once_with(
         device="cuda",
-        precision="fp16",
+        precision="fp32",
         context_min_px=256,
         context_max_mask_ratio=0.08,
         telea_radius=3,

@@ -40,7 +40,7 @@ class TorchLamaBackend:
         *,
         model: object | None = None,
         device: str = "cuda",
-        precision: str = "fp16",
+        precision: str = "fp32",
     ) -> None:
         if precision not in {"fp16", "fp32"}:
             raise ValueError("precision must be fp16 or fp32")
@@ -264,7 +264,7 @@ def build_lama_inpainter(
     checkpoint_path: str | Path | None = None,
     *,
     device: str = "cuda",
-    precision: str = "fp16",
+    precision: str = "fp32",
     context_min_px: int = 256,
     context_max_mask_ratio: float = 0.08,
     telea_radius: int = 3,

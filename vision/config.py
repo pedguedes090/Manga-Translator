@@ -37,7 +37,7 @@ _DEFAULTS: dict[str, Any] = {
         "flat_max_texture_std": 12.0,
         "telea_radius": 3,
         "lama_full_resolution": True,
-        "precision": "fp16",
+        "precision": "fp32",
         "oom_context_min_px": 256,
         "oom_context_max_mask_ratio": 0.08,
     },
@@ -149,6 +149,8 @@ class VisionConfig:
             raise ValueError("max_bubble_border_overlap must be in [0, 1]")
         if text_mask.dilation_min_px > text_mask.dilation_max_px:
             raise ValueError("dilation_min_px must not exceed dilation_max_px")
+        if self.inpaint.precision not in {"fp16", "fp32"}:
+            raise ValueError("inpaint precision must be fp16 or fp32")
 
 
 def _merge_defaults(defaults: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:
