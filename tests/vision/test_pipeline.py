@@ -122,6 +122,49 @@ def test_erase_page_unions_complex_masks_for_one_inference():
     ]
 
 
+def test_erase_page_reports_runtime_fallback_warning():
+    class FallbackInpainter:
+        def __init__(self):
+            self.last_run = None
+
+        def inpaint(self, image, mask):
+            self.last_run = type(
+                "Run", (), {"warning": "LaMa CUDA OOM; used Telea"}
+            )()
+            return image.copy()
+
+    pipeline = VisionPipeline(
+        masker=HybridTextMasker(), lama_inpainter=FallbackInpainter()
+    )
+
+    _, results = pipeline.erase_page(
+        np.zeros((20, 30, 3), np.uint8),
+        [_lama_block("complex", (2, 3, 8, 9))],
+    )
+
+    assert results[0].warning == "LaMa CUDA OOM; used Telea"
+
+
+def test_erase_page_continues_with_telea_when_lama_runtime_fails():
+    class BrokenInpainter:
+        def inpaint(self, image, mask):
+            raise RuntimeError("checkpoint is unavailable")
+
+    image = np.zeros((20, 30, 3), np.uint8)
+    cv2.rectangle(image, (0, 0), (29, 19), (80, 100, 120), -1)
+    pipeline = VisionPipeline(
+        masker=HybridTextMasker(), lama_inpainter=BrokenInpainter()
+    )
+
+    output, results = pipeline.erase_page(
+        image, [_lama_block("complex", (2, 3, 8, 9))]
+    )
+
+    assert output.shape == image.shape
+    assert "checkpoint is unavailable" in results[0].warning
+    assert "Telea" in results[0].warning
+
+
 def test_prepare_then_assess_and_erase_generates_one_mask():
     image = np.full((90, 150, 3), 245, np.uint8)
     cv2.putText(
