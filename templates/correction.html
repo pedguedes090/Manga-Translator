@@ -11,18 +11,28 @@
 
 <div class="corr-topbar">
   <a href="/" class="corr-logo">← Quay lại</a>
-  <span class="corr-title">{% if mode == "postrender" %}✏️ Chỉnh sửa sau dịch{% else %}✏️ Chỉnh sửa bóng thoại{% endif %}</span>
-  <span class="corr-stats"><span id="total-blocks">{{ total_blocks }}</span> bóng thoại · {{ images|length }} ảnh</span>
+  <span class="corr-title">{% if mode == "postrender" %}✏️ Chỉnh sửa sau dịch{% elif mode == "styleditor" %}🎨 Chỉnh sửa & Style{% else %}✏️ Chỉnh sửa bóng thoại{% endif %}</span>
+  <span class="corr-stats"><span id="total-blocks">{{ total_blocks }}</span> bóng thoại · {% if mode == "styleditor" %}{{ all_images|length }} ảnh{% else %}{{ images|length }} ảnh{% endif %}</span>
 </div>
 
 <div class="corr-toolbar">
   <div class="tool-group" role="group" aria-label="Công cụ">
     <button class="tool-btn active" id="tool-select" aria-pressed="true">🖱️ Chọn</button>
-    {% if mode != "postrender" %}<button class="tool-btn" id="tool-add" aria-pressed="false">＋ Thêm</button>{% endif %}
+    {% if mode != "postrender" and mode != "styleditor" %}<button class="tool-btn" id="tool-add" aria-pressed="false">＋ Thêm</button>{% endif %}
     <button class="tool-btn" id="tool-delete" aria-pressed="false">🗑️ Xoá</button>
+    {% if mode == "styleditor" %}
+    <button class="tool-btn" id="tool-erase-rect" aria-pressed="false" title="Xoá vùng hình chữ nhật (phím E)">▭ Rect</button>
+    <button class="tool-btn" id="tool-erase-brush" aria-pressed="false" title="Cọ xoá nền (phím E)">🖌 Cọ</button>
+    <label class="brush-size-label" for="brush-size">Cỡ cọ</label>
+    <select id="brush-size" class="brush-size" aria-label="Cỡ cọ xoá nền">
+      <option value="4">4px</option>
+      <option value="12" selected>12px</option>
+      <option value="24">24px</option>
+    </select>
+    {% endif %}
     <button class="tool-btn" id="tool-undo" aria-pressed="false">↩ Undo</button>
     <button class="tool-btn" id="tool-redo" aria-pressed="false">↪ Redo</button>
-    {% if mode != "postrender" %}<button class="tool-btn" id="tool-reset" aria-pressed="false">↺ Reset</button>{% endif %}
+    {% if mode != "postrender" and mode != "styleditor" %}<button class="tool-btn" id="tool-reset" aria-pressed="false">↺ Reset</button>{% endif %}
   </div>
   <div class="zoom-group" aria-label="Điều khiển zoom">
     <button class="zoom-btn" id="zoom-out" title="Thu nhỏ (-)">−</button>
@@ -39,6 +49,16 @@
 <div class="corr-body">
   <div class="corr-sidebar">
     <div id="image-thumbnails">
+      {% if mode == "styleditor" %}
+      {% for ai in all_images %}
+      <div class="thumb-item {% if ai.idx == (postrender_image_idx | default(0)) %}active{% endif %}" data-index="{{ ai.idx }}" role="button" tabindex="0" aria-label="Chuyển đến ảnh {{ ai.name }}">
+        <canvas class="thumb-canvas" id="thumb-{{ ai.idx }}"></canvas>
+        <span class="thumb-name">{{ ai.name }}</span>
+        <span class="thumb-count"></span>
+        <span class="thumb-badge">chưa render</span>
+      </div>
+      {% endfor %}
+      {% else %}
       {% for img in images %}
       <div class="thumb-item {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}" role="button" tabindex="0" aria-label="Chuyển đến ảnh {{ img.name }}">
         <canvas class="thumb-canvas" id="thumb-{{ loop.index0 }}"></canvas>
@@ -47,6 +67,7 @@
         <span class="thumb-badge">chưa lưu</span>
       </div>
       {% endfor %}
+      {% endif %}
     </div>
   </div>
 
@@ -79,13 +100,18 @@
   <a href="/translate-result/{{ session_id }}" class="btn-outline" id="btn-cancel">↩ Về kết quả</a>
   <button id="btn-rerender-one" class="btn-primary">🔄 Re-render ảnh này</button>
   <button id="btn-save-all" class="btn-primary">✅ Lưu tất cả & Về kết quả</button>
+  {% elif mode == "styleditor" %}
+  <a href="/correction/{{ session_id }}" class="btn-outline" id="btn-back-correction">✏️ Quay lại chỉnh OCR</a>
+  <a href="/translate-result/{{ session_id }}" class="btn-outline" id="btn-cancel">↩ Về kết quả</a>
+  <button id="btn-rerender-one" class="btn-primary">🔄 Render ảnh này</button>
+  <button id="btn-save-all" class="btn-primary">✅ Lưu tất cả & Xem kết quả</button>
   {% else %}
   <a href="/" class="btn-outline">Huỷ</a>
   <button id="btn-continue" class="btn-primary">✅ Tiếp tục dịch & Render</button>
   {% endif %}
 </div>
 
-<form id="continue-form" method="POST" action="/continue-translate" style="display:none;">
+<form id="continue-form" method="POST" action="/styleditor-prepare" style="display:none;">
   <input type="hidden" name="session_id" value="{{ session_id }}">
   <input type="hidden" name="modified_blocks" id="modified-blocks-input">
 </form>
@@ -97,7 +123,9 @@ window.CORRECTION_DATA = {
     sessionId: {{ session_id | tojson }},
     images: {{ images | tojson }},
     mode: {{ (mode | default("preview")) | tojson }},
-    postrenderImageIdx: {{ (postrender_image_idx | default(-1)) | tojson }}
+    postrenderImageIdx: {{ (postrender_image_idx | default(-1)) | tojson }},
+    allImages: {{ (all_images | default([])) | tojson }},
+    warning: {{ (warning | default(None)) | tojson }}
 };
 </script>
 <script src="{{ url_for('static', filename='js/correction.js') }}"></script>

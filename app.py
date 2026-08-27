@@ -29,10 +29,12 @@ from add_text import (
     add_text_bbox,
     appearance_for_prepared,
     assess_erasability,
+    erase_mask_region,
     erase_text_region,
     merge_nearby_ocr_blocks,
     refine_tall_narrow_ocr_bbox,
     render_all_blocks,
+    resolve_font_path_for_style,
     should_skip_ocr_artifact,
     sort_ocr_blocks_reading_order,
 )
@@ -276,12 +278,81 @@ def _is_json_serializable(value):
 
 
 def get_font_path(font_name: str) -> str:
-    if font_name in ["animeace_", "arial", "mangat"]:
-        return f"fonts/{font_name}i.ttf"
-    elif font_name.startswith("Yuki-") or font_name.startswith("yuki-"):
-        return f"fonts/{font_name}.ttf"
+    """Map a font name to its font file (base fonts: <name>i.ttf)."""
+    return resolve_font_path_for_style(font_name) or f"fonts/{font_name}.ttf"
+
+
+def _fonts_dir_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+
+
+def list_available_fonts():
+    """Scan fonts/ for .ttf files -> [{"name", "label"}] (spec section 4.4).
+
+    animeace_i.ttf -> animeace_/Animeace, ariali.ttf -> arial/Arial,
+    mangati.ttf -> mangat/Mangat, Yuki-*.ttf -> name without extension.
+    The 3 base fonts come first, then Yuki fonts alphabetically.
+    """
+    entries = []
+    fonts_dir = _fonts_dir_path()
+    if os.path.isdir(fonts_dir):
+        for filename in sorted(os.listdir(fonts_dir)):
+            if not filename.lower().endswith(".ttf"):
+                continue
+            name = filename[:-4]
+            if name == "animeace_i":
+                entry = ("animeace_", "Animeace")
+            elif name == "ariali":
+                entry = ("arial", "Arial")
+            elif name == "mangati":
+                entry = ("mangat", "Mangat")
+            else:
+                entry = (name, name)
+            entries.append(entry)
+    base_names = {"animeace_", "arial", "mangat"}
+    base = [e for e in entries if e[0] in base_names]
+    others = [e for e in entries if e[0] not in base_names]
+    others.sort(key=lambda e: e[0].lower())
+    return [{"name": name, "label": label} for name, label in base + others]
+
+
+def normalize_block_style(raw, default_font):
+    """Validate/normalize a per-block style dict (V3 spec F5 / section 4.7).
+
+    Returns a dict {font, font_size, text_color, bold, italic, align} with all
+    keys, or None when raw is not a dict. Invalid values are replaced with
+    defaults: unknown font -> default_font, font_size clamped 0-120, invalid
+    hex color -> None (auto), align -> "center", bold/italic coerced to bool.
+    """
+    if not isinstance(raw, dict):
+        return None
+    font_names = {entry["name"] for entry in list_available_fonts()}
+    font = raw.get("font")
+    if not isinstance(font, str) or font not in font_names:
+        font = default_font
+    try:
+        font_size = int(raw.get("font_size", 0))
+    except (TypeError, ValueError):
+        font_size = 0
+    font_size = max(0, min(120, font_size))
+    text_color = raw.get("text_color")
+    if not (isinstance(text_color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", text_color)):
+        text_color = None
     else:
-        return f"fonts/{font_name}.ttf"
+        text_color = text_color.upper()
+    bold = bool(raw.get("bold", False))
+    italic = bool(raw.get("italic", False))
+    align = raw.get("align", "center")
+    if align not in ("left", "center", "right"):
+        align = "center"
+    return {
+        "font": font,
+        "font_size": font_size,
+        "text_color": text_color,
+        "bold": bold,
+        "italic": italic,
+        "align": align,
+    }
 
 
 def emit_progress(phase, current, total, message):
@@ -514,11 +585,17 @@ def _normalize_render_plan_entry(entry, image_shape=None):
         )
         if not bbox:
             continue
-        blocks.append({
+        block_out = {
             "text": str(block.get("text", "") or ""),
             "translated": str(block.get("translated", "") or ""),
             "bbox": bbox,
-        })
+        }
+        # V3: keep a valid per-block style (spec 4.7); drop invalid styles
+        # so legacy sessions never crash.
+        style = normalize_block_style(block.get("style"), "animeace_")
+        if style is not None:
+            block_out["style"] = style
+        blocks.append(block_out)
     erase_regions = []
     for region in entry.get("erase_regions", []):
         normalized = normalize_bbox_for_json(
@@ -528,16 +605,26 @@ def _normalize_render_plan_entry(entry, image_shape=None):
         )
         if normalized:
             erase_regions.append(normalized)
-    return {"name": str(entry.get("name", "") or ""), "erase_regions": erase_regions, "blocks": blocks}
+    normalized_entry = {
+        "name": str(entry.get("name", "") or ""),
+        "erase_regions": erase_regions,
+        "blocks": blocks,
+    }
+    # V3: erase_mask (base64 PNG, white = erase) accumulates across re-renders.
+    erase_mask = entry.get("erase_mask")
+    if isinstance(erase_mask, str) and erase_mask:
+        normalized_entry["erase_mask"] = erase_mask
+    return normalized_entry
 
 
 def _iter_plan_blocks(entry):
-    """Yield (original_text, translated_text, bbox) from a cleaned plan entry."""
+    """Yield (original_text, translated_text, bbox, style) from a plan entry."""
     for block in entry.get("blocks", []):
         yield (
             block.get("text", "") or "",
             block.get("translated", "") or "",
             list(block["bbox"]),
+            block.get("style") or None,
         )
 
 
@@ -598,13 +685,15 @@ def _persist_render_plan(session_id, session_data, render_plan, rendered_images)
 
 
 def render_image_with_blocks(name, image, blocks, font_path, source_lang,
-                             vision_adapter=None, extra_erase_regions=None):
+                             vision_adapter=None, extra_erase_regions=None,
+                             extra_erase_mask=None):
     """Render one image from its ORIGINAL pixels (no OCR, no translation).
 
     Args:
         name: image name (unused, kept for call-site symmetry).
         image: original BGR numpy image (never mutated).
-        blocks: [{"text": original, "translated": str, "bbox": [x1,y1,x2,y2]}]
+        blocks: [{"text": original, "translated": str, "bbox": [x1,y1,x2,y2],
+                  "style": optional per-block V3 style dict}]
         font_path: font file for translated text.
         source_lang: language code used by erase heuristics.
         vision_adapter: optional adapter that erases + reports appearance
@@ -612,6 +701,8 @@ def render_image_with_blocks(name, image, blocks, font_path, source_lang,
         extra_erase_regions: additional regions to erase AFTER the blocks
             (original text left behind when a bbox was moved/resized, or a
             deleted block) — spec §F5, risk R2 ordering.
+        extra_erase_mask: optional uint8 mask (white = erase) applied after
+            the extra regions, before text render (V3 spec F7, P1).
 
     Returns:
         (image, render_plan_entry) — image is a new array; entry holds the
@@ -631,6 +722,7 @@ def render_image_with_blocks(name, image, blocks, font_path, source_lang,
             "text": str(block.get("text", "") or ""),
             "translated": translated,
             "bbox": bbox,
+            "style": block.get("style") or None,
         })
 
     render_blocks = []
@@ -662,6 +754,7 @@ def render_image_with_blocks(name, image, blocks, font_path, source_lang,
                     "bbox": item["bbox"],
                     "text_color": appearance["text_color"],
                     "appearance": appearance,
+                    "style": item.get("style") or None,
                 })
         except Exception as exc:
             print("Vision pipeline failed; used legacy erasure: " + str(exc))
@@ -680,6 +773,7 @@ def render_image_with_blocks(name, image, blocks, font_path, source_lang,
                 "bbox": item["bbox"],
                 "text_color": text_color,
                 "appearance": appearance,
+                "style": item.get("style") or None,
             })
 
     # Erase extra regions (original text under moved/resized/deleted bboxes).
@@ -698,13 +792,27 @@ def render_image_with_blocks(name, image, blocks, font_path, source_lang,
                 continue
             base, _, _ = erase_text_region(base, normalized, source_lang=source_lang)
 
+    # V3: erase arbitrary mask regions (brush/rect strokes, spec F4.6/F7) —
+    # also idempotent because the mask is accumulated server-side.
+    if extra_erase_mask is not None:
+        try:
+            base = erase_mask_region(base, extra_erase_mask, source_lang=source_lang)
+        except Exception as exc:
+            print(f"  [erase_mask] failed: {exc}")
+
     if render_blocks:
         base = render_all_blocks(base, render_blocks, font_path)
 
-    plan_blocks = [
-        {"text": item["text"], "translated": item["translated"], "bbox": list(item["bbox"])}
-        for item in candidates
-    ]
+    plan_blocks = []
+    for item in candidates:
+        plan_block = {
+            "text": item["text"],
+            "translated": item["translated"],
+            "bbox": list(item["bbox"]),
+        }
+        if item.get("style"):
+            plan_block["style"] = item["style"]
+        plan_blocks.append(plan_block)
     return base, {"name": name, "erase_regions": [], "blocks": plan_blocks}
 
 
@@ -729,37 +837,19 @@ def snapshot_original_images(all_ocr_results):
     return {name: image.copy() for name, image, _ in all_ocr_results}
 
 
-def translate_and_render(all_ocr_results, translator_obj, selected_font, translator_type,
-                         source_lang, target_lang, style, *, vision_adapter=None,
-                         collect_render_plan=False):
-    """Phase 2+3: Translate all texts then render (used when OCR is already done)
+def translate_texts_all(all_texts, translator_obj, translator_type,
+                        source_lang='ja', target_lang='vi'):
+    """Phase 2: batch-translate all texts (shared by the full pipeline and
+    the V3 style-editor prepare flow).
 
-    Returns a list of {'name', 'image'} results (backward compatible). When
-    collect_render_plan=True, returns (processed_results, render_plan) instead
-    so the manual-mode session can persist post-render editing state.
+    Mirrors the original translate_and_render Phase 2 exactly: on failure the
+    original texts are kept and translator_obj.last_warning is set so the UI
+    can warn the user.
+
+    Returns:
+        (translated_texts, warning) — warning is None when translation
+        succeeded without a fallback.
     """
-    total_images = len(all_ocr_results)
-    all_texts = []
-    for _, _, blocks in all_ocr_results:
-        for block in blocks:
-            text = block.get('text', '').strip()
-            if text:
-                block['_text_idx'] = len(all_texts)
-                all_texts.append(text)
-    
-    if not all_texts:
-        print("No text to translate.")
-        emit_progress('done', total_images, total_images, 'Không có text để dịch')
-        results = [{'name': name, 'image': image} for name, image, _ in all_ocr_results]
-        if collect_render_plan:
-            empty_plan = [
-                {"name": name, "erase_regions": [], "blocks": []}
-                for name, _, _ in all_ocr_results
-            ]
-            return results, empty_plan
-        return results
-    
-    # Phase 2: Batch translate
     emit_progress('translation', 0, 1, f'Đang dịch {len(all_texts)} đoạn text...')
     print(f"\n[Phase 2] Translating {len(all_texts)} text segments...")
 
@@ -829,6 +919,43 @@ def translate_and_render(all_ocr_results, translator_obj, selected_font, transla
 
     print("OK Translation completed")
     emit_progress('translation', 1, 1, 'Dịch hoàn tất')
+    return translated_texts, getattr(translator_obj, "last_warning", None)
+
+def translate_and_render(all_ocr_results, translator_obj, selected_font, translator_type,
+                         source_lang, target_lang, style, *, vision_adapter=None,
+                         collect_render_plan=False):
+    """Phase 2+3: Translate all texts then render (used when OCR is already done)
+
+    Returns a list of {'name', 'image'} results (backward compatible). When
+    collect_render_plan=True, returns (processed_results, render_plan) instead
+    so the manual-mode session can persist post-render editing state.
+    """
+    total_images = len(all_ocr_results)
+    all_texts = []
+    for _, _, blocks in all_ocr_results:
+        for block in blocks:
+            text = block.get('text', '').strip()
+            if text:
+                block['_text_idx'] = len(all_texts)
+                all_texts.append(text)
+    
+    if not all_texts:
+        print("No text to translate.")
+        emit_progress('done', total_images, total_images, 'Không có text để dịch')
+        results = [{'name': name, 'image': image} for name, image, _ in all_ocr_results]
+        if collect_render_plan:
+            empty_plan = [
+                {"name": name, "erase_regions": [], "blocks": []}
+                for name, _, _ in all_ocr_results
+            ]
+            return results, empty_plan
+        return results
+    
+    # Phase 2: Batch translate
+    translated_texts, _phase2_warning = translate_texts_all(
+        all_texts, translator_obj, translator_type,
+        source_lang=source_lang, target_lang=target_lang,
+    )
 
     # Phase 3: Render
     emit_progress('rendering', 0, total_images, 'Đang render text vào ảnh...')
@@ -1167,6 +1294,48 @@ def correction_page(session_id):
                          total_blocks=ocr_blocks_count)
 
 
+def rebuild_ocr_from_modified_blocks(session_data, modified_blocks):
+    """Rebuild all_ocr_results from frontend-modified blocks (V2/V3 shared).
+
+    Returns (new_ocr_results, all_texts): new_ocr_results is a list of
+    (name, image, blocks) with blocks sorted in reading order and every text
+    block tagged with a global _text_idx. Invalid image indices are skipped.
+    """
+    all_ocr_results = session_data['all_ocr_results']
+    all_texts = []
+    text_index = 0
+
+    new_ocr_results = []
+    for img_data in modified_blocks:
+        try:
+            img_idx = int(img_data.get('image_idx'))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if img_idx < 0 or img_idx >= len(all_ocr_results):
+            continue
+        name, original_image, _ = all_ocr_results[img_idx]
+
+        blocks = []
+        for b in img_data.get('blocks', []):
+            if not isinstance(b, dict):
+                continue
+            text = b.get('text', '').strip()
+            bbox = normalize_bbox_for_json(b.get('bbox', None),
+                                           image_shape=original_image.shape,
+                                           expand_ratio=0)
+            if bbox and len(bbox) == 4:
+                blocks.append({'text': text, 'bbox': bbox, '_bbox_expanded': True})
+
+        blocks = sort_ocr_blocks_reading_order(blocks)
+        for block in blocks:
+            if block['text']:
+                block['_text_idx'] = text_index
+                text_index += 1
+                all_texts.append(block['text'])
+
+        new_ocr_results.append((name, original_image, blocks))
+    return new_ocr_results, all_texts
+
 @app.route("/continue-translate", methods=["POST"])
 def continue_translate():
     """Continue pipeline after manual correction"""
@@ -1188,33 +1357,10 @@ def continue_translate():
     if not isinstance(modified_blocks, list):
         return redirect("/")
     
-    # Rebuild all_ocr_results from modified blocks
-    all_ocr_results = session_data['all_ocr_results']
-    all_texts = []
-    text_index = 0
-    
-    new_ocr_results = []
-    for img_data in modified_blocks:
-        img_idx = img_data['image_idx']
-        name, original_image, _ = all_ocr_results[img_idx]
-        
-        blocks = []
-        for b in img_data['blocks']:
-            text = b.get('text', '').strip()
-            bbox = normalize_bbox_for_json(b.get('bbox', None),
-                                           image_shape=original_image.shape,
-                                           expand_ratio=0)
-            if bbox and len(bbox) == 4:
-                blocks.append({'text': text, 'bbox': bbox, '_bbox_expanded': True})
-
-        blocks = sort_ocr_blocks_reading_order(blocks)
-        for block in blocks:
-            if block['text']:
-                block['_text_idx'] = text_index
-                text_index += 1
-                all_texts.append(block['text'])
-        
-        new_ocr_results.append((name, original_image, blocks))
+    # Rebuild all_ocr_results from modified blocks (shared V2/V3 helper)
+    new_ocr_results, all_texts = rebuild_ocr_from_modified_blocks(
+        session_data, modified_blocks
+    )
     
     # Build all_images list
     all_images = [{'image': img, 'name': name} for name, img, _ in new_ocr_results]
@@ -1282,6 +1428,423 @@ def ocr_region():
     text = " ".join(b.get("text", "").strip() for b in blocks if b.get("text", "").strip())
     return {"text": text}
 
+
+# ── Manual Mode V3: style editor (spec docs/manual-mode-v3-spec.md §4) ─────
+
+
+def _build_translator_from_session(session_data):
+    """Construct a configured MangaTranslator from stored session options."""
+    translator_obj = MangaTranslator(
+        source=session_data.get('source_lang', 'ja'),
+        target=session_data.get('target_lang', 'vi'),
+    )
+    style = session_data.get('style', '')
+    translator_type = session_data.get('translator_type', 'google')
+    if translator_type == "gemini":
+        gemini_keys = session_data.get('gemini_api_keys') or parse_gemini_api_keys(
+            session_data.get('gemini_api_key', '')
+        )
+        translator_obj._gemini_custom_prompt = style if style else None
+        translator_obj._gemini_api_keys = gemini_keys
+        translator_obj._gemini_model = session_data.get('gemini_model', DEFAULT_GEMINI_MODEL)
+        from translator.gemini_translator import GeminiTranslator
+        translator_obj._gemini_translator = GeminiTranslator(
+            api_keys=gemini_keys,
+            custom_prompt=style if style else None,
+            model_name=session_data.get('gemini_model', DEFAULT_GEMINI_MODEL),
+        )
+    elif translator_type == "copilot":
+        translator_obj._copilot_server = session_data.get('copilot_server', 'http://localhost:8080')
+        translator_obj._copilot_model = session_data.get('copilot_model', 'gpt-4o')
+        translator_obj._copilot_custom_prompt = style if style else None
+    return translator_obj
+
+
+def _save_erased_jpeg(session_id, idx, image):
+    """Persist page_<i>_erased.jpg (JPEG q92) — erased background canvas of the
+    V3 style editor (spec F2).
+    """
+    base = _safe_session_path(session_id)
+    if not base:
+        return
+    os.makedirs(base, exist_ok=True)
+    path = os.path.join(base, "page_" + str(idx) + "_erased.jpg")
+    cv2.imwrite(path, image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+
+
+def _load_erased_image(session_id, idx, fallback_image=None):
+    """Load page_<i>_erased.jpg; None when missing/corrupt/mismatched."""
+    base = _safe_session_path(session_id)
+    if not base:
+        return None
+    path = os.path.join(base, "page_" + str(idx) + "_erased.jpg")
+    if not os.path.exists(path):
+        return None
+    image = cv2.imread(path)
+    if image is None:
+        return None
+    if fallback_image is not None and image.shape[:2] != fallback_image.shape[:2]:
+        return None
+    return image
+
+
+def _decode_erase_mask(mask_b64, image_shape):
+    """Decode a base64 PNG erase mask (white = erase) and resize to image size.
+
+    Returns a uint8 BGR mask at image resolution, or None when invalid
+    (spec F7: client downscales to <= 2048 long side; server upsamples).
+    """
+    if not mask_b64 or not isinstance(mask_b64, str):
+        return None
+    try:
+        raw = base64.b64decode(mask_b64)
+    except (ValueError, TypeError):
+        return None
+    decoded = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_UNCHANGED)
+    if decoded is None:
+        return None
+    if decoded.ndim == 3 and decoded.shape[2] >= 3:
+        mask = decoded[:, :, :3]
+    else:
+        mask = cv2.cvtColor(decoded, cv2.COLOR_GRAY2BGR)
+    h, w = image_shape[:2]
+    if mask.shape[0] != h or mask.shape[1] != w:
+        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+    return mask
+
+
+def _sync_draft_after_render(session_id, session_data, image_idx, client_blocks):
+    """Merge the last rendered client state back into v3_draft (V3 A5.10).
+
+    The client block list is the editor source of truth: styles and edits
+    applied in the editor must survive a reload of /styleditor. Blocks that
+    are missing from the client list were deleted in the editor and are
+    removed from the draft; blocks with an empty translation are kept as
+    "-" chips (spec A1.6). Matching is by original text (stable within an
+    editor session), which stays correct when blocks are moved or deleted.
+    """
+    draft = session_data.get("v3_draft")
+    if not isinstance(draft, dict):
+        return
+    draft_images = draft.get("images")
+    if not isinstance(draft_images, list) or image_idx >= len(draft_images):
+        return
+    draft_entry = draft_images[image_idx]
+    if not isinstance(draft_entry, dict):
+        return
+    draft_blocks = draft_entry.get("blocks")
+    if not isinstance(draft_blocks, list):
+        return
+
+    remaining = [cb for cb in client_blocks if isinstance(cb, dict)]
+    used = [False] * len(remaining)
+    kept = []
+    for db in draft_blocks:
+        if not isinstance(db, dict):
+            continue
+        match = None
+        for i, cb in enumerate(remaining):
+            if not used[i] and str(cb.get("text") or "") == str(db.get("text") or ""):
+                match = cb
+                used[i] = True
+                break
+        if match is None:
+            continue  # deleted in the editor -> drop from the draft
+        merged = dict(db)
+        merged["translated"] = str(match.get("translated") or "")
+        bbox = match.get("bbox")
+        if bbox:
+            merged["bbox"] = list(bbox)
+        style = normalize_block_style(
+            match.get("style"), session_data.get("selected_font", "animeace_")
+        )
+        if style is not None:
+            merged["style"] = style
+        kept.append(merged)
+    draft_entry["blocks"] = kept
+    _save_session(session_id, session_data)
+
+
+@app.route("/api/fonts")
+def api_fonts():
+    """List available fonts from fonts/ (spec section 4.4)."""
+    return {"fonts": list_available_fonts()}
+
+
+@app.route("/font-file/<name>")
+def font_file(name):
+    """Serve a font TTF for FontFace (spec section 4.5). Whitelist only —
+    name must exactly match a fonts/ entry, so path traversal is impossible.
+    """
+    font_names = {entry['name'] for entry in list_available_fonts()}
+    if name not in font_names:
+        return {"error": "font_not_found"}, 404
+    path = get_font_path(name)
+    if not path or not os.path.isfile(path):
+        return {"error": "font_not_found"}, 404
+    return send_file(path, mimetype="font/ttf", as_attachment=False)
+
+
+@app.route("/styleditor-prepare", methods=["POST"])
+def styleditor_prepare():
+    """V3: translate (Phase 2 ONLY) + erase original text, then open the
+    style editor on the erased backgrounds. Never renders and never re-runs
+    OCR (spec F1/A1.4). Payload identical to /continue-translate.
+    """
+    session_id = request.form.get("session_id", "")
+    modified_blocks_json = request.form.get("modified_blocks", "[]")
+
+    session_data = load_session(session_id)
+    if session_data is None:
+        return redirect("/")
+
+    try:
+        modified_blocks = json.loads(modified_blocks_json)
+    except json.JSONDecodeError:
+        return redirect("/")
+    if isinstance(modified_blocks, dict):
+        modified_blocks = [modified_blocks]
+    if not isinstance(modified_blocks, list):
+        return redirect("/")
+
+    new_ocr_results, all_texts = rebuild_ocr_from_modified_blocks(
+        session_data, modified_blocks
+    )
+
+    if not all_texts:
+        # No text at all: behave like V2 /continue-translate (straight to the
+        # results page, spec A1.8).
+        emit_progress('done', 0, 0, 'Không có text để dịch')
+        processed_results = [{'name': name, 'image': image} for name, image, _ in new_ocr_results]
+        original_images_by_name = {name: image for name, image, _ in new_ocr_results}
+        processed_images = build_result_images(processed_results, original_images_by_name)
+        return render_template(
+            "translate.html",
+            images=processed_images,
+            correction_session_id=session_id,
+        )
+
+    try:
+        translator_obj = _build_translator_from_session(session_data)
+        translated_texts, warning = translate_texts_all(
+            all_texts, translator_obj,
+            session_data.get('translator_type', 'google'),
+            source_lang=session_data.get('source_lang', 'ja'),
+            target_lang=session_data.get('target_lang', 'vi'),
+        )
+    except Exception as exc:
+        # Translator failure must still open the editor with original texts
+        # (spec F1.5/A10.3).
+        print(f"[styleditor-prepare] translator init failed: {exc}")
+        translated_texts = all_texts
+        warning = f"Lỗi dịch: {exc}"
+
+    default_font = session_data.get('selected_font', 'animeace_')
+    default_style = {
+        "font": default_font,
+        "font_size": 0,
+        "text_color": None,
+        "bold": False,
+        "italic": False,
+        "align": "center",
+    }
+    source_lang = session_data.get('source_lang', 'ja')
+
+    draft_images = []
+    for idx, (name, image, blocks) in enumerate(new_ocr_results):
+        draft_blocks = []
+        erased_base = image.copy()
+        for block in blocks:
+            text = block.get('text', '')
+            text_idx = block.get('_text_idx', -1)
+            translated = translated_texts[text_idx] if 0 <= text_idx < len(translated_texts) else text
+            bbox = block.get('bbox')
+            if not bbox or len(bbox) < 4:
+                continue
+            draft_blocks.append({
+                "text": str(text),
+                "translated": str(translated or ""),
+                "bbox": list(bbox),
+                "style": dict(default_style),
+            })
+            erased_base, _, _ = erase_text_region(erased_base, bbox, source_lang=source_lang)
+        draft_images.append({"name": str(name), "blocks": draft_blocks})
+        _save_erased_jpeg(session_id, idx, erased_base)
+
+    session_data["v3_draft"] = {"images": draft_images}
+    session_data["v3_last_warning"] = warning or None
+    # A new draft generation starts clean: drop any render state from a
+    # previous prepare so /styleditor can never serve stale plan blocks or
+    # stale rendered jpegs (MERGE RULE gate = page_<i>_rendered.jpg exists).
+    session_data.pop("render_plan", None)
+    _purge_stale_rendered_jpegs(session_id, 0)
+    _save_session(session_id, session_data)
+
+    print(
+        f"[styleditor-prepare] {len(draft_images)} image(s), {len(all_texts)} text(s) translated;",
+        f" warning={bool(warning)}",
+    )
+    return redirect("/styleditor/" + session_id + "?img=0")
+
+
+@app.route("/styleditor/<session_id>")
+def styleditor_page(session_id):
+    """V3 style editor page: erased background + translated blocks (spec 4.2).
+
+    Missing session -> home; session without v3_draft -> correction page
+    (risk R6 fallback).
+    """
+    session_data = load_session(session_id)
+    if session_data is None:
+        return redirect("/")
+
+    draft = session_data.get("v3_draft")
+    if not isinstance(draft, dict) or not isinstance(draft.get("images"), list) or not draft["images"]:
+        return redirect("/correction/" + session_id)
+
+    draft_images = draft["images"]
+    raw_idx = request.args.get("img", "0")
+    try:
+        image_idx = int(raw_idx)
+    except (TypeError, ValueError):
+        image_idx = 0
+    if image_idx < 0 or image_idx >= len(draft_images):
+        image_idx = 0
+
+    all_ocr_results = session_data['all_ocr_results']
+    if image_idx >= len(all_ocr_results):
+        return redirect("/correction/" + session_id)
+
+    name, original_image, _ = all_ocr_results[image_idx]
+    erased_image = _load_erased_image(session_id, image_idx, original_image)
+    if erased_image is None:
+        erased_image = original_image
+
+    _, buffer = cv2.imencode(".jpg", erased_image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    encoded = base64.b64encode(buffer.tobytes()).decode("utf-8")
+
+    default_font = session_data.get('selected_font', 'animeace_')
+    default_style = {
+        "font": default_font,
+        "font_size": 0,
+        "text_color": None,
+        "bold": False,
+        "italic": False,
+        "align": "center",
+    }
+
+    # [MERGE RULE — spec 4.2] render_plan[i] is the source of truth for
+    # images that were already rendered: blocks (text/translated/bbox/
+    # style) come from the plan so reloading the editor keeps styles and
+    # edits (A5.10); erase state is returned for the client to restore
+    # the erase preview (A4.10). v3_draft is used for images never
+    # rendered, and draft-only blocks (empty translation -> "—" chip,
+    # A1.6) are appended after the plan blocks.
+    # Gate: only merge from the plan when this image was ACTUALLY rendered.
+    # _load_render_plan fabricates a legacy plan for sessions without a raw
+    # render_plan — a fresh prepare session must keep using the draft, so the
+    # merge requires page_<i>_rendered.jpg to exist (written by every render).
+    base_dir = _safe_session_path(session_id)
+    rendered_jpeg_exists = bool(base_dir) and os.path.exists(
+        os.path.join(base_dir, "page_%d_rendered.jpg" % image_idx)
+    )
+    # A REAL plan must also exist in session_data: _load_render_plan would
+    # otherwise fabricate a legacy plan (empty translations) for a session
+    # that has a stale jpeg but no render state.
+    raw_plan = session_data.get("render_plan")
+    has_real_plan = isinstance(raw_plan, list) and bool(raw_plan)
+    plan, _ocr_bboxes = _load_render_plan(session_data)
+    plan_entry = (
+        plan[image_idx]
+        if rendered_jpeg_exists and has_real_plan and image_idx < len(plan)
+        else None
+    )
+    draft_blocks = draft_images[image_idx].get("blocks") or []
+    if not isinstance(draft_blocks, list):
+        draft_blocks = []
+
+    erase_regions = []
+    erase_mask = None
+    blocks_out = []
+    if plan_entry is not None:
+        plan_blocks = plan_entry.get("blocks") or []
+        used_texts = set()
+        for pb in plan_blocks:
+            if not isinstance(pb, dict):
+                continue
+            bbox = normalize_bbox_for_json(
+                pb.get("bbox"), image_shape=erased_image.shape, expand_ratio=0
+            )
+            if not bbox:
+                continue
+            used_texts.add(str(pb.get("text") or ""))
+            blocks_out.append({
+                "text": str(pb.get("text") or ""),
+                "translated": str(pb.get("translated") or ""),
+                "bbox": bbox,
+                "style": normalize_block_style(pb.get("style"), default_font) or dict(default_style),
+            })
+        for db in draft_blocks:
+            if not isinstance(db, dict):
+                continue
+            if str(db.get("text") or "") in used_texts:
+                continue
+            bbox = normalize_bbox_for_json(
+                db.get("bbox"), image_shape=erased_image.shape, expand_ratio=0
+            )
+            if not bbox:
+                continue
+            blocks_out.append({
+                "text": str(db.get("text") or ""),
+                "translated": str(db.get("translated") or ""),
+                "bbox": bbox,
+                "style": normalize_block_style(db.get("style"), default_font) or dict(default_style),
+            })
+        erase_regions = [list(r) for r in (plan_entry.get("erase_regions") or [])]
+        raw_mask = plan_entry.get("erase_mask")
+        if isinstance(raw_mask, str) and raw_mask:
+            erase_mask = raw_mask
+    else:
+        for b in draft_blocks:
+            if not isinstance(b, dict):
+                continue
+            bbox = normalize_bbox_for_json(
+                b.get("bbox"), image_shape=erased_image.shape, expand_ratio=0
+            )
+            if not bbox:
+                continue
+            blocks_out.append({
+                "text": b.get("text", "") or "",
+                "translated": b.get("translated", "") or "",
+                "bbox": bbox,
+                "style": normalize_block_style(b.get("style"), default_font) or dict(default_style),
+            })
+
+    image_data = {
+        "name": str(draft_images[image_idx].get("name") or name),
+        "data": encoded,
+        "blocks": blocks_out,
+        "erase_regions": erase_regions,
+        "width": int(erased_image.shape[1]),
+        "height": int(erased_image.shape[0]),
+    }
+    if erase_mask:
+        image_data["erase_mask"] = erase_mask
+    total_blocks = sum(len(img.get("blocks", [])) for img in draft_images)
+    all_images = [
+        {"name": str(img.get("name") or ("page%d" % i)), "idx": i}
+        for i, img in enumerate(draft_images)
+    ]
+    return render_template(
+        "correction.html",
+        session_id=session_id,
+        images=[image_data],
+        total_blocks=total_blocks,
+        mode="styleditor",
+        postrender_image_idx=image_idx,
+        all_images=all_images,
+        warning=session_data.get("v3_last_warning"),
+    )
 
 # ── Post-render editing routes (Manual Mode V2, spec §4.1–4.3) ──────────────
 
@@ -1405,6 +1968,7 @@ def postrender_page(session_id):
                 "text": b.get("text", "") or "",
                 "translated": b.get("translated", "") or "",
                 "bbox": list(b["bbox"]),
+                **({"style": b["style"]} if b.get("style") else {}),
             }
             for b in entry.get("blocks", [])
         ],
@@ -1457,6 +2021,17 @@ def rerender_image():
     if not isinstance(deleted_regions_json, list):
         return {"error": "invalid_deleted_regions_json"}, 400
 
+    # V3: erase_regions_json is the canonical erase payload (rect/brush/delete);
+    # deleted_regions_json stays as the V2 alias (spec section 4.3).
+    try:
+        erase_regions_json = json.loads(request.form.get("erase_regions_json", "[]"))
+    except (json.JSONDecodeError, TypeError):
+        return {"error": "invalid_erase_regions_json"}, 400
+    if isinstance(erase_regions_json, dict):
+        erase_regions_json = [erase_regions_json]
+    if not isinstance(erase_regions_json, list):
+        return {"error": "invalid_erase_regions_json"}, 400
+
     session_data = load_session(session_id)
     if session_data is None:
         return {"error": "session_not_found"}, 404
@@ -1471,8 +2046,10 @@ def rerender_image():
     name, original_image, _ = all_ocr_results[image_idx]
     h, w = original_image.shape[:2]
 
+    default_font = session_data.get('selected_font', 'animeace_')
+    old_plan_blocks = (old_entry.get("blocks") or []) if old_entry is not None else []
     blocks = []
-    for raw_block in blocks_json:
+    for raw_index, raw_block in enumerate(blocks_json):
         if not isinstance(raw_block, dict):
             continue
         bbox = normalize_bbox_for_json(
@@ -1480,11 +2057,21 @@ def rerender_image():
         )
         if not bbox:
             return {"error": "invalid_bbox"}, 422
-        blocks.append({
+        style = normalize_block_style(raw_block.get("style"), default_font)
+        if style is None and raw_index < len(old_plan_blocks):
+            # A7.8: blocks without style reuse the plan's previous style so
+            # V2 clients never lose V3 styling.
+            style = normalize_block_style(
+                old_plan_blocks[raw_index].get("style"), default_font
+            )
+        block_entry = {
             "text": str(raw_block.get("text", "") or ""),
             "translated": str(raw_block.get("translated", "") or "").strip(),
             "bbox": bbox,
-        })
+        }
+        if style is not None:
+            block_entry["style"] = style
+        blocks.append(block_entry)
 
     deleted_regions = [
         region for region in (
@@ -1494,13 +2081,41 @@ def rerender_image():
         )
         if region is not None
     ]
+    erase_regions = [
+        region for region in (
+            normalize_bbox_for_json(r, image_shape=(h, w), expand_ratio=0)
+            for r in erase_regions_json
+            if isinstance(r, list)
+        )
+        if region is not None
+    ]
+    # Canonical field wins over the V2 alias when both are provided.
+    if request.form.get("erase_regions_json") not in (None, ""):
+        deleted_regions = erase_regions
+
+    # V3: optional erase mask (PNG b64, white = erase; spec F7 P1).
+    erase_mask = None
+    erase_mask_raw = request.form.get("erase_mask", "")
+    if erase_mask_raw:
+        erase_mask = _decode_erase_mask(erase_mask_raw, (h, w))
+        if erase_mask is None:
+            return {"error": "invalid_erase_mask"}, 400
+    # Monotonic: a request without a mask still applies the accumulated mask
+    # from previous renders; a new mask is OR-ed into the stored one BEFORE
+    # rendering, so the accumulated set always drives this render.
+    if erase_mask is None and old_entry is not None:
+        erase_mask = _decode_erase_mask(str(old_entry.get("erase_mask") or ""), (h, w))
+    elif erase_mask is not None and old_entry is not None:
+        old_mask = _decode_erase_mask(str(old_entry.get("erase_mask") or ""), (h, w))
+        if old_mask is not None:
+            erase_mask = cv2.bitwise_or(old_mask, erase_mask)
 
     extra_erase_regions = _entry_erase_regions(
         old_entry,
         ocr_bboxes[image_idx] if image_idx < len(ocr_bboxes) else [],
     ) + deleted_regions
 
-    font_path = get_font_path(session_data.get('selected_font', 'animeace_'))
+    font_path = get_font_path(default_font)
     source_lang = session_data.get('source_lang', 'ja')
     vision_adapter = build_optional_vision_adapter()
 
@@ -1509,6 +2124,7 @@ def rerender_image():
             name, original_image, blocks, font_path, source_lang,
             vision_adapter=vision_adapter,
             extra_erase_regions=extra_erase_regions,
+            extra_erase_mask=erase_mask,
         )
     except Exception as exc:
         print(f"Re-render failed for {session_id}/{image_idx}: {exc}")
@@ -1530,6 +2146,13 @@ def rerender_image():
         if region not in merged_erase_regions:
             merged_erase_regions.append(region)
     new_entry["erase_regions"] = merged_erase_regions
+
+    # Persist the (accumulated) mask so future re-renders stay monotonic
+    # (spec F4.3/A4.5): once erased, always erased.
+    if erase_mask is not None:
+        new_entry["erase_mask"] = base64.b64encode(
+            cv2.imencode(".png", erase_mask)[1].tobytes()
+        ).decode("utf-8")
 
     new_plan = []
     for i in range(max(len(plan), len(all_ocr_results))):
@@ -1557,12 +2180,23 @@ def rerender_image():
 
     _persist_render_plan(session_id, session_data, new_plan, {image_idx: rendered_image})
 
-    response_blocks = [
-        {"text": b.get("text", "") or "",
-         "translated": b.get("translated", "") or "",
-         "bbox": list(b["bbox"])}
-        for b in new_entry.get("blocks", [])
-    ]
+    # V3 A5.10: keep v3_draft in sync with the client state so reloading the
+    # style editor preserves styles/edits (and deleted blocks stay deleted).
+    try:
+        _sync_draft_after_render(session_id, session_data, image_idx, blocks)
+    except Exception as exc:
+        print(f"[v3_draft sync] failed: {exc}")
+
+    response_blocks = []
+    for b in new_entry.get("blocks", []):
+        item = {
+            "text": b.get("text", "") or "",
+            "translated": b.get("translated", "") or "",
+            "bbox": list(b["bbox"]),
+        }
+        if b.get("style"):
+            item["style"] = b["style"]
+        response_blocks.append(item)
     return {
         "name": name,
         "data": encode_image_jpeg(rendered_image, quality=92),
@@ -1637,10 +2271,13 @@ def rerender_all():
             continue
         name, original_image, _ = all_ocr_results[image_idx]
         old_entry = new_plan[image_idx] if image_idx < len(new_plan) else None
-        blocks = [
-            {"text": text, "translated": translated, "bbox": bbox}
-            for text, translated, bbox in _iter_plan_blocks(old_entry)
-        ] if old_entry is not None else []
+        blocks = []
+        if old_entry is not None:
+            for text, translated, bbox, style in _iter_plan_blocks(old_entry):
+                item = {"text": text, "translated": translated, "bbox": bbox}
+                if style:
+                    item["style"] = style
+                blocks.append(item)
         extra_erase_regions = _entry_erase_regions(
             old_entry,
             ocr_bboxes[image_idx] if image_idx < len(ocr_bboxes) else [],

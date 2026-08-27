@@ -6,9 +6,18 @@
     // RENDERED image, blocks edit translated text + bbox, re-render wired to
     // POST /re-render-image (spec F5).
     const isPostrender = DATA.mode === 'postrender';
+    // V3: style editor (spec F1-F14) — erased background + live translated
+    // text + per-block style panel + background erase tools.
+    const isStyleditor = DATA.mode === 'styleditor';
     // Global image index in the session (the API needs it even though the
     // post-render editor only ever loads ONE image per page).
     const globalImageIdx = (typeof DATA.postrenderImageIdx === 'number' && DATA.postrenderImageIdx >= 0) ? DATA.postrenderImageIdx : 0;
+    // V3: all session images for the sidebar (each editor page shows one image).
+    const allImages = Array.isArray(DATA.allImages) ? DATA.allImages : [];
+    const DEFAULT_STYLE = {
+        font: 'animeace_', font_size: 0, text_color: null,
+        bold: false, italic: false, align: 'center'
+    };
 
     let currentImageIdx = 0;
     let currentTool = 'select';
@@ -51,6 +60,23 @@
     const HANDLE_MOUSE_RADIUS = 10;     // F2: mouse hit radius in CSS px
     const HANDLE_TOUCH_SIZE = 44;       // F2: touch invisible hit area ≥44x44 CSS px
 
+    // ---- V3 style editor state (F4/F5/F6/F8/F9) ----
+    let brushSize = 12;                 // F4.3: 4/12/24 px (image px)
+    let isErasing = false;              // brush stroke in progress
+    let strokePoints = [];              // current brush stroke (image coords)
+    let strokeColor = null;             // sampled fill color for the stroke
+    let lastPointerPos = null;          // image coords, for the brush cursor ring
+    let fontList = [];                  // from GET /api/fonts
+    const fontLoads = {};               // font name -> Promise (FontFace)
+    const fontFailures = {};            // font name -> true (fallback + toast once)
+    const fontReady = {};               // font name -> true (loaded, no re-draw loop)
+    const layoutCache = {};             // styled text layout cache (keyed)
+    const edgeColorCache = {};          // erase region fill color cache (keyed)
+    const autoColorCache = {};          // auto text color cache (keyed)
+    const eraseLayer = document.createElement('canvas');
+    const bgCanvas = document.createElement('canvas');
+    const STYLE_SWATCHES = ['#000000', '#ffffff', '#5E1675', '#E53935', '#1E88E5', '#43A047', '#FDD835', '#8E24AA'];
+
     // The 8 resize handles (F2): corners + edge midpoints.
     const HANDLES = [
         { id: 'nw', fx: 0, fy: 0, corner: true,  cursor: 'nwse-resize' },
@@ -80,7 +106,19 @@
     const thumbnailKeys = {};
 
     // ---- Mode cosmetics ----
-    if (isPostrender) {
+    if (isStyleditor) {
+        document.body.classList.add('mode-styleditor');
+        const add = document.getElementById('tool-add');
+        if (add) add.style.display = 'none';
+        const reset = document.getElementById('tool-reset');
+        if (reset) reset.style.display = 'none';
+        if (shortcutsHint) {
+            shortcutsHint.innerHTML =
+                '<kbd>S</kbd> Chọn <kbd>D</kbd> Xoá <kbd>E</kbd> Xoá nền <kbd>B</kbd>/<kbd>I</kbd> Đậm/Nghiêng ' +
+                '<kbd>L</kbd>/<kbd>C</kbd>/<kbd>R</kbd> Căn lề <kbd>[</kbd>/<kbd>]</kbd> Chọn bóng thoại ' +
+                '<kbd>Ctrl+Z</kbd> Undo <kbd>Ctrl+Wheel</kbd> Zoom';
+        }
+    } else if (isPostrender) {
         document.body.classList.add('mode-postrender');
         const el = document.getElementById('tool-add');
         if (el) el.style.display = 'none';
@@ -116,7 +154,8 @@
         return (blocks || []).map(b => ({
             text: b.text || '',
             translated: b.translated || '',
-            bbox: b.bbox ? [...b.bbox] : null
+            bbox: b.bbox ? [...b.bbox] : null,
+            style: b.style ? { ...b.style } : null
         }));
     }
 
@@ -125,7 +164,16 @@
             imageIdx: currentImageIdx,
             images: images.map(img => ({
                 blocks: cloneBlocks(img.blocks || []),
-                deletedRegions: [...(img.deletedRegions || [])]
+                deletedRegions: [...(img.deletedRegions || [])],
+                // V3: eraseRegions is monotonic (never restored/shrunk — F4.5);
+                // the *preview* lists drive eraseLayer and ARE undoable.
+                eraseRegions: [...(img.eraseRegions || [])],
+                erasePreviewRects: [...(img.erasePreviewRects || [])],
+                eraseStrokesPreview: (img.eraseStrokesPreview || []).map(s => ({
+                    points: (s.points || []).map(pt => [pt[0], pt[1]]),
+                    size: s.size,
+                    color: s.color
+                }))
             }))
         };
     }
@@ -141,12 +189,30 @@
         snap.images.forEach((imgSnap, idx) => {
             setBlocks(idx, cloneBlocks(imgSnap.blocks || []));
             images[idx].deletedRegions = [...(imgSnap.deletedRegions || [])];
+            if (isStyleditor) {
+                // F4.5: eraseRegions is MONOTONIC — keep the current (larger)
+                // set so re-render still erases undone regions. Only the
+                // preview lists (eraseLayer source) are restored.
+                images[idx].erasePreviewRects = [...(imgSnap.erasePreviewRects || [])];
+                images[idx].eraseStrokesPreview = (imgSnap.eraseStrokesPreview || []).map(s => ({
+                    points: (s.points || []).map(pt => [pt[0], pt[1]]),
+                    size: s.size,
+                    color: s.color
+                }));
+            }
             // Undo returns the block state that is NOT rendered yet → dirty.
-            if (isPostrender && idx === snap.imageIdx) images[idx].dirty = true;
+            if ((isPostrender || isStyleditor) && idx === snap.imageIdx) {
+                images[idx].dirty = true;
+                if (isStyleditor) setDirtyBadge(globalImageIdx, true);
+            }
         });
         selectedBlockIdx = -1;
         updateBlockEditor(-1);
-        loadImage(currentImageIdx).then(() => { fitCanvas(); requestDraw(); updateThumbnails(); updateNavButtons(); updateFooterButtons(); });
+        if (isStyleditor) saveDraftState();
+        loadImage(currentImageIdx).then(() => {
+            if (isStyleditor) { initBgCanvas(); redrawEraseLayer(); }
+            fitCanvas(); requestDraw(); updateThumbnails(); updateNavButtons(); updateFooterButtons();
+        });
     }
 
     function undo() {
@@ -267,11 +333,176 @@
 
     // ---- Dirty state (F4) ----
     function markDirty(idx) {
-        if (!isPostrender || !images[idx]) return;
+        if (!(isPostrender || isStyleditor) || !images[idx]) return;
         images[idx].dirty = true;
+        // V3: the page-local image (idx 0) IS the global page image.
+        if (isStyleditor) {
+            setDirtyBadge(globalImageIdx, true);
+            saveDraftState();
+        }
         requestDraw();
         requestThumbnails();
         updateFooterButtons();
+    }
+
+    // V3 F4: dirty badges survive page navigation via localStorage (P1 for the
+    // whole session, P0 for the current image — spec 2.2).
+    function dirtyBadgeKey() { return 'styleditor_dirty_' + sessionId; }
+    function readDirtyBadges() {
+        try {
+            const raw = localStorage.getItem(dirtyBadgeKey());
+            const obj = raw ? JSON.parse(raw) : {};
+            return (obj && typeof obj === 'object') ? obj : {};
+        } catch (_) { return {}; }
+    }
+    function writeDirtyBadges(obj) {
+        try { localStorage.setItem(dirtyBadgeKey(), JSON.stringify(obj)); } catch (_) { /* private mode */ }
+    }
+    function setDirtyBadge(idx, dirty) {
+        const obj = readDirtyBadges();
+        const wasDirty = !!obj[idx];
+        if (dirty) obj[idx] = true;
+        else delete obj[idx];
+        writeDirtyBadges(obj);
+        if (wasDirty !== dirty) requestThumbnails();
+    }
+    function clearDirtyBadge(idx) { setDirtyBadge(idx, false); }
+
+    // ---- V3 draft state persistence (chốt captain 8.3 / backend contract):
+    // keep each image's un-rendered edits in sessionStorage so page navigation
+    // never loses them, and "Lưu tất cả" can render EVERY dirty image
+    // sequentially before redirecting. ----
+    function draftKey(idx) { return 'styleditor_draft_' + sessionId + '_' + idx; }
+    function readDraftState(idx) {
+        try {
+            const raw = sessionStorage.getItem(draftKey(idx));
+            return raw ? JSON.parse(raw) : null;
+        } catch (_) { return null; }
+    }
+    function removeDraftState(idx) {
+        try { sessionStorage.removeItem(draftKey(idx)); } catch (_) { /* private mode */ }
+    }
+    function saveDraftState() {
+        if (!isStyleditor) return;
+        const img = images[currentImageIdx];
+        if (!img) return;
+        // Only un-rendered edits need a draft: a clean image must never be
+        // re-marked dirty by a stale restore (chốt captain 8.3).
+        if (!img.dirty) return;
+        const imgEl = imageCache[currentImageIdx];
+        const state = {
+            blocks: (img.blocks || []).map(b => ({
+                text: b.text || '', translated: b.translated || '',
+                bbox: b.bbox ? [...b.bbox] : null,
+                style: b.style ? { ...b.style } : null
+            })),
+            eraseRegions: (img.eraseRegions || []).map(r => [...r]),
+            deletedRegions: (img.deletedRegions || []).map(r => [...r]),
+            previewRects: (img.erasePreviewRects || []).map(r => [...r]),
+            strokes: (img.eraseStrokes || []).map(s => ({
+                points: (s.points || []).map(pt => [pt[0], pt[1]]), size: s.size, color: s.color
+            })),
+            strokesPreview: (img.eraseStrokesPreview || []).map(s => ({
+                points: (s.points || []).map(pt => [pt[0], pt[1]]), size: s.size, color: s.color
+            })),
+            w: imgEl ? imgEl.width : 0,
+            h: imgEl ? imgEl.height : 0
+        };
+        try { sessionStorage.setItem(draftKey(globalImageIdx), JSON.stringify(state)); } catch (_) { /* quota */ }
+    }
+    // A4.10 / §4.2 MERGE RULE: after a render, /styleditor returns
+    // render_plan[i].erase_regions so the reloaded editor restores the erase
+    // preview (flat fills, R3 approximation) and keeps the monotonic payload.
+    // Tolerant: absent field (legacy backend) → empty lists, no regression.
+    function loadServerEraseState() {
+        const img = images[0];
+        if (!img) return;
+        const regions = Array.isArray(img.erase_regions) ? img.erase_regions : null;
+        if (regions) {
+            img.eraseRegions = regions.map(r => [r[0], r[1], r[2], r[3]]);
+            img.erasePreviewRects = regions.map(r => [r[0], r[1], r[2], r[3]]);
+        }
+        // erase_mask (P1, spec 4.2): PNG b64 grayscale (white = erase) — the
+        // server accumulates it monotonically, so the client never re-sends it;
+        // here we rebuild the eraseLayer preview from it (flat fill sampled at
+        // the mask bbox edges — R3 approximation, spec A4.10).
+        if (typeof img.erase_mask === 'string' && img.erase_mask) {
+            buildEraseMaskLayer(img.erase_mask);
+        }
+    }
+
+    // Decode the persisted erase mask into an offscreen "eraseMaskLayer" that
+    // redrawEraseLayer composites under the region/stroke previews. The layer
+    // is static (monotonic server state) and survives undo (preview-only undo).
+    function buildEraseMaskLayer(maskB64) {
+        const img = imageCache[currentImageIdx];
+        if (!img) return;
+        const image = new Image();
+        image.onload = () => {
+            try {
+                const maskCanvas = document.createElement('canvas');
+                maskCanvas.width = img.width;
+                maskCanvas.height = img.height;
+                const mg = maskCanvas.getContext('2d');
+                mg.drawImage(image, 0, 0, img.width, img.height);
+                const data = mg.getImageData(0, 0, img.width, img.height).data;
+                // bounding box of the white (erase) area, stride-sampled
+                let minX = img.width, minY = img.height, maxX = -1, maxY = -1;
+                for (let y = 0; y < img.height; y += 3) {
+                    for (let x = 0; x < img.width; x += 3) {
+                        const i = (y * img.width + x) * 4;
+                        const lum = (data[i] + data[i + 1] + data[i + 2]) / 3;
+                        if (lum > 128) {
+                            if (x < minX) minX = x;
+                            if (x > maxX) maxX = x;
+                            if (y < minY) minY = y;
+                            if (y > maxY) maxY = y;
+                        }
+                    }
+                }
+                if (maxX < minX || maxY < minY) return;
+                // flat fill color sampled from the mask bbox edges (R3)
+                const color = sampleEdgeColor([minX, minY, maxX + 2, maxY + 2]);
+                // color-where-mask via 'destination-in' compositing
+                const fillCanvas = document.createElement('canvas');
+                fillCanvas.width = img.width;
+                fillCanvas.height = img.height;
+                const fg = fillCanvas.getContext('2d');
+                fg.fillStyle = color;
+                fg.fillRect(0, 0, img.width, img.height);
+                fg.globalCompositeOperation = 'destination-in';
+                fg.drawImage(maskCanvas, 0, 0);
+                const layer = document.createElement('canvas');
+                layer.width = img.width;
+                layer.height = img.height;
+                layer.getContext('2d').drawImage(fillCanvas, 0, 0);
+                images[currentImageIdx].eraseMaskLayer = layer;
+                redrawEraseLayer();
+            } catch (_) { /* decode/preview failure — regions still cover P0 */ }
+        };
+        image.onerror = () => { /* ignore; regions cover the acceptance */ };
+        image.src = 'data:image/png;base64,' + maskB64;
+    }
+
+    function restoreDraftState() {
+        if (!isStyleditor) return;
+        const img = images[0];
+        const state = readDraftState(globalImageIdx);
+        if (!state || !img) return;
+        if (Array.isArray(state.blocks)) {
+            img.blocks = state.blocks.map(b => ({
+                text: b.text || '', translated: b.translated || '',
+                bbox: b.bbox ? [...b.bbox] : null,
+                style: normalizeStyle(b.style)
+            }));
+        }
+        img.eraseRegions = Array.isArray(state.eraseRegions) ? state.eraseRegions.map(r => [...r]) : [];
+        img.deletedRegions = Array.isArray(state.deletedRegions) ? state.deletedRegions.map(r => [...r]) : [];
+        img.erasePreviewRects = Array.isArray(state.previewRects) ? state.previewRects.map(r => [...r]) : [];
+        img.eraseStrokes = Array.isArray(state.strokes) ? state.strokes : [];
+        img.eraseStrokesPreview = Array.isArray(state.strokesPreview) ? state.strokesPreview : [];
+        img.dirty = true;
+        setDirtyBadge(globalImageIdx, true);
     }
 
     // ---- Drawing ----
@@ -284,13 +515,19 @@
         if (mainCanvas.height !== img.height) mainCanvas.height = img.height;
         ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
         ctx.drawImage(img, 0, 0);
+        // V3: user erase layer (rect fills + brush strokes) composites on top
+        // of the erased background (spec F4).
+        if (isStyleditor && eraseLayer.width > 0) ctx.drawImage(eraseLayer, 0, 0);
 
         blocks.forEach((block, i) => {
             const bbox = block.bbox;
             if (!bbox || bbox.length !== 4) return;
             const [x1, y1, x2, y2] = bbox;
-            const dirty = isPostrender && images[currentImageIdx].dirty;
-            const isClean = isPostrender && !dirty;
+            const dirty = (isPostrender || isStyleditor) && images[currentImageIdx].dirty;
+            const isClean = (isPostrender || isStyleditor) && !dirty;
+            const hasTranslated = !!(block.translated || '').trim();
+            // V3 A1.6: block with empty translation renders as a dashed "—" chip.
+            const isEmptyStyled = isStyleditor && !hasTranslated;
 
             if (i === selectedBlockIdx) {
                 ctx.strokeStyle = '#00e676'; ctx.lineWidth = 2.5;
@@ -298,12 +535,16 @@
             } else if (currentTool === 'delete' && i === hoveredDeleteIdx) {
                 ctx.strokeStyle = '#ff1744'; ctx.lineWidth = 2.5;
                 ctx.fillStyle = 'rgba(255,23,68,0.2)';
+            } else if (isEmptyStyled) {
+                // V3: empty translation = dashed neutral border, no fill.
+                ctx.strokeStyle = '#b0a0bd'; ctx.lineWidth = 1.5;
+                ctx.fillStyle = 'rgba(176,160,189,0.05)';
             } else if (dirty) {
-                // post-render: dirty = dashed orange (not re-rendered yet)
+                // post-render/styleditor: dirty = dashed orange (not rendered yet)
                 ctx.strokeStyle = '#ff9100'; ctx.lineWidth = 1.5;
                 ctx.fillStyle = 'rgba(255,145,0,0.08)';
             } else if (isClean) {
-                // post-render: clean = solid green (matches the last render)
+                // post-render/styleditor: clean = solid green (matches last render)
                 ctx.strokeStyle = '#00e676'; ctx.lineWidth = 1.5;
                 ctx.fillStyle = 'rgba(0,230,118,0.06)';
             } else {
@@ -314,22 +555,29 @@
             if (dirty && i !== selectedBlockIdx && !(currentTool === 'delete' && i === hoveredDeleteIdx)) {
                 ctx.setLineDash([5, 4]);
             }
+            if (isEmptyStyled) ctx.setLineDash([5, 4]);
             ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
             ctx.setLineDash([]);
 
-            const label = (isPostrender ? (block.translated || block.text || '') : (block.text || '')).substring(0, 12);
-            if (label) {
+            // V3 F3.1/F6: draw the translated text LIVE with its style.
+            if (isStyleditor && hasTranslated) drawStyledBlockText(block, i);
+
+            const label = ((isPostrender || isStyleditor) ? (block.translated || block.text || '') : (block.text || '')).substring(0, 12);
+            const labelText = label || (isStyleditor ? '—' : '');
+            if (labelText) {
                 ctx.font = 'bold 11px sans-serif';
-                const lw = ctx.measureText(label).width + 8;
+                const lw = ctx.measureText(labelText).width + 8;
                 const lh = 18;
                 let ly = y1 - lh - 2; if (ly < 0) ly = y1 + 2;
-                // Label chip: selected = green; post-render dirty = orange;
-                // post-render clean = dark green; pre-render keeps the
+                // Label chip: selected = green; dirty = orange; clean = dark
+                // green; empty styled block = neutral; pre-render keeps the
                 // incumbent orange for non-selected blocks (no visual regress).
-                ctx.fillStyle = (i === selectedBlockIdx) ? '#00e676' : (dirty ? '#ff9100' : (isPostrender ? '#00a152' : '#ff9100'));
+                ctx.fillStyle = (i === selectedBlockIdx) ? '#00e676'
+                    : (isEmptyStyled ? '#b0a0bd'
+                        : (dirty ? '#ff9100' : ((isPostrender || isStyleditor) ? '#00a152' : '#ff9100')));
                 ctx.fillRect(x1, ly, lw, lh);
                 ctx.fillStyle = '#000';
-                ctx.fillText(label, x1 + 4, ly + 13);
+                ctx.fillText(labelText, x1 + 4, ly + 13);
             }
             if (i === selectedBlockIdx) drawHandles(x1, y1, x2, y2);
         });
@@ -339,12 +587,28 @@
             const y = Math.min(drawStart.y, drawEnd.y);
             const w = Math.abs(drawEnd.x - drawStart.x);
             const h = Math.abs(drawEnd.y - drawStart.y);
-            ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2;
-            ctx.setLineDash([6, 4]);
-            ctx.fillStyle = 'rgba(0,229,255,0.1)';
+            if (currentTool === 'erase-rect') {
+                // V3 F4.1: rect erase preview (dashed magenta — reads as "remove")
+                ctx.strokeStyle = '#e91e63'; ctx.lineWidth = 2;
+                ctx.setLineDash([6, 4]);
+                ctx.fillStyle = 'rgba(233,30,99,0.08)';
+            } else {
+                ctx.strokeStyle = '#00e5ff'; ctx.lineWidth = 2;
+                ctx.setLineDash([6, 4]);
+                ctx.fillStyle = 'rgba(0,229,255,0.1)';
+            }
             ctx.fillRect(x, y, w, h);
             ctx.strokeRect(x, y, w, h);
             ctx.setLineDash([]);
+        }
+
+        // V3 F4: brush cursor ring shows the real brush diameter.
+        if (isStyleditor && currentTool === 'erase-brush' && lastPointerPos) {
+            const r = brushSize / 2;
+            ctx.strokeStyle = 'rgba(255,255,255,0.95)'; ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(lastPointerPos.x, lastPointerPos.y, r + 1, 0, Math.PI * 2); ctx.stroke();
+            ctx.strokeStyle = '#5E1675'; ctx.lineWidth = 1.5;
+            ctx.beginPath(); ctx.arc(lastPointerPos.x, lastPointerPos.y, r, 0, Math.PI * 2); ctx.stroke();
         }
     }
 
@@ -552,6 +816,22 @@
             return;
         }
 
+        // V3 F4: background erase tools
+        if (currentTool === 'erase-rect') {
+            isDrawing = true; drawStart = pos; drawEnd = pos;
+            selectedBlockIdx = -1; updateBlockEditor(-1);
+            return;
+        }
+        if (currentTool === 'erase-brush') {
+            isErasing = true;
+            strokePoints = [pos];
+            strokeColor = sampleColorAt(pos);
+            paintBrushPoint(pos);
+            lastPointerPos = pos;
+            try { mainCanvas.setPointerCapture(e.pointerId); } catch (_) { /* noop */ }
+            return;
+        }
+
         // select tool — handle resize has priority over move (F3.1)
         if (selectedBlockIdx >= 0) {
             const handle = hitTestHandle(sx, sy, e.pointerType);
@@ -604,7 +884,19 @@
             requestDraw(); return;
         }
         if (isDrawing && drawStart) { drawEnd = pos; requestDraw(); }
-        if (currentTool === 'delete') {
+        if (isErasing && currentTool === 'erase-brush') {
+            strokePoints.push(pos);
+            paintBrushPoint(pos);
+            return;
+        }
+        if (currentTool === 'erase-rect' || currentTool === 'erase-brush') {
+            // F4.3: live brush cursor ring (redraw only when it actually moved)
+            if (!lastPointerPos || Math.hypot(pos.x - lastPointerPos.x, pos.y - lastPointerPos.y) >= 1) {
+                lastPointerPos = pos;
+                requestDraw();
+            }
+            mainCanvas.style.cursor = 'crosshair';
+        } else if (currentTool === 'delete') {
             const hIdx = findBlockAt(pos.x, pos.y);
             if (hoveredDeleteIdx !== hIdx) { hoveredDeleteIdx = hIdx; requestDraw(); }
             mainCanvas.style.cursor = hIdx >= 0 ? 'pointer' : 'crosshair';
@@ -624,7 +916,7 @@
             if (!sameBbox(currentBbox, dragStartBbox)) {
                 pushUndo(dragStartSnapshot || snapshot());
                 if (dragBlockIdx === selectedBlockIdx) {
-                    updateBlockEditor(selectedBlockIdx);
+                    refreshBlockEditorValues();
                 }
                 markDirty(currentImageIdx);
                 requestThumbnails();
@@ -637,7 +929,7 @@
             if (!sameBbox(currentBbox, resizeStartBbox)) {
                 // F2.5/A2.5: one undo step for the whole resize gesture
                 pushUndo(resizeStartSnapshot || snapshot());
-                updateBlockEditor(selectedBlockIdx);
+                refreshBlockEditorValues();
                 markDirty(currentImageIdx);
                 requestThumbnails();
             }
@@ -656,6 +948,49 @@
                 deleteBlockAt(deleteDown.hitIdx, { fromClick: true });
             }
             deleteDown = null;
+        }
+
+        // V3 F4.1/A4.1: rect erase — clamp to image edges, ignore < 4×4 px
+        if (currentTool === 'erase-rect' && isDrawing && drawStart && drawEnd) {
+            const W = mainCanvas.width, H = mainCanvas.height;
+            const x1 = clamp(Math.round(Math.min(drawStart.x, drawEnd.x)), 0, W);
+            const y1 = clamp(Math.round(Math.min(drawStart.y, drawEnd.y)), 0, H);
+            const x2 = clamp(Math.round(Math.max(drawStart.x, drawEnd.x)), 0, W);
+            const y2 = clamp(Math.round(Math.max(drawStart.y, drawEnd.y)), 0, H);
+            if (x2 - x1 >= 4 && y2 - y1 >= 4) {
+                pushUndo();
+                const img = images[currentImageIdx];
+                const region = [x1, y1, x2, y2];
+                img.eraseRegions.push(region);
+                img.erasePreviewRects.push(region);
+                markDirty(currentImageIdx);
+                redrawEraseLayer();
+            } else {
+                // A4.9 (P1): tiny rects never add an erase region.
+                showToast('Vùng xoá quá nhỏ (tối thiểu 4×4 px)', { variant: 'error', duration: 2500 });
+            }
+            isDrawing = false; drawStart = null; drawEnd = null;
+        }
+
+        // V3 F4.2/A4.2: brush stroke — bbox of the stroke joins eraseRegions
+        if (currentTool === 'erase-brush' && isErasing) {
+            isErasing = false;
+            const bbox = strokeBBox();
+            if (bbox && (bbox[2] - bbox[0]) >= 2 && (bbox[3] - bbox[1]) >= 2) {
+                pushUndo();
+                const img = images[currentImageIdx];
+                const pts = strokePoints.map(pt => [Math.round(pt.x), Math.round(pt.y)]);
+                img.eraseRegions.push(bbox);
+                img.eraseStrokes.push({ points: pts, size: brushSize, color: strokeColor });
+                img.eraseStrokesPreview.push({ points: pts, size: brushSize, color: strokeColor });
+                markDirty(currentImageIdx);
+                requestDraw();
+            } else {
+                // A4.6: strokes < 2px are dropped; rebuild the layer from the
+                // committed preview lists (removes the live-painted dots).
+                redrawEraseLayer();
+            }
+            strokePoints = []; strokeColor = null;
         }
 
         finishDrag();
@@ -684,6 +1019,11 @@
 
     mainCanvas.addEventListener('pointercancel', () => {
         deleteDown = null;
+        if (isErasing && currentTool === 'erase-brush') {
+            isErasing = false;
+            strokePoints = []; strokeColor = null;
+            redrawEraseLayer();
+        }
         finishDrag();
         isDrawing = false; drawStart = null; drawEnd = null;
         isDragging = false; dragBlockIdx = -1; dragOffset = null;
@@ -748,7 +1088,7 @@
         bbox[2] = bbox[0] + w;
         bbox[3] = bbox[1] + h;
         requestDraw(); requestThumbnails();
-        updateBlockEditor(selectedBlockIdx);
+        refreshBlockEditorValues();
         markDirty(currentImageIdx);
     }
 
@@ -784,17 +1124,39 @@
             case 'f': e.preventDefault(); zoomLevel = 1; fitCanvas(); break;
             case '1': e.preventDefault(); setActualSize(); break;
             case 's': setTool('select'); break;
-            case 'a': if (!isPostrender) setTool('add'); break;
+            case 'a': if (!isPostrender && !isStyleditor) setTool('add'); break;
             case 'd': setTool('delete'); break;
+            case 'e':
+                // V3 F11: E cycles select → erase-rect → erase-brush → select
+                if (isStyleditor) {
+                    setTool(currentTool === 'select' ? 'erase-rect'
+                        : (currentTool === 'erase-rect' ? 'erase-brush' : 'select'));
+                }
+                break;
+            case 'b':
+                if (isStyleditor && hasSelection) toggleStyle('bold');
+                break;
+            case 'i':
+                if (isStyleditor && hasSelection) toggleStyle('italic');
+                break;
+            case 'l':
+                if (isStyleditor && hasSelection) setBlockStyle({ align: 'left' });
+                break;
+            case 'c':
+                if (isStyleditor && hasSelection) setBlockStyle({ align: 'center' });
+                break;
+            case 'r':
+                if (isStyleditor && hasSelection) setBlockStyle({ align: 'right' });
+                break;
             case 'arrowleft':
                 e.preventDefault();
                 if (hasSelection) nudgeBlock(-nudgeStep, 0, !e.repeat);
-                else if (currentImageIdx > 0) switchImage(currentImageIdx - 1);
+                else if (navImageIdx() > 0) switchImage(navImageIdx() - 1);
                 break;
             case 'arrowright':
                 e.preventDefault();
                 if (hasSelection) nudgeBlock(nudgeStep, 0, !e.repeat);
-                else if (currentImageIdx < images.length - 1) switchImage(currentImageIdx + 1);
+                else if (navImageIdx() < allImages.length - 1) switchImage(navImageIdx() + 1);
                 break;
             case 'arrowup':
                 e.preventDefault();
@@ -805,6 +1167,13 @@
                 if (hasSelection) nudgeBlock(0, nudgeStep, !e.repeat);
                 break;
             case 'escape':
+                if (isStyleditor && (currentTool === 'erase-rect' || currentTool === 'erase-brush')) {
+                    // V3 F11: Esc exits the erase tool back to Select
+                    if (isErasing) { isErasing = false; strokePoints = []; strokeColor = null; redrawEraseLayer(); }
+                    isDrawing = false; drawStart = null; drawEnd = null;
+                    setTool('select');
+                    break;
+                }
                 if (currentTool === 'delete') { setTool('select'); break; }
                 selectedBlockIdx = -1; updateBlockEditor(-1);
                 isDrawing = false; drawStart = null; drawEnd = null;
@@ -857,6 +1226,16 @@
             images[currentImageIdx].deletedRegions.push(bbox);
             markDirty(currentImageIdx);
         }
+        // V3 F4.7: delete merges into the monotonic eraseRegions list too, so
+        // the region stays erased across re-renders (spec F4.5).
+        if (isStyleditor && bbox) {
+            const img = images[currentImageIdx];
+            img.deletedRegions.push(bbox);
+            img.eraseRegions.push(bbox);
+            img.erasePreviewRects.push(bbox);
+            markDirty(currentImageIdx);
+            redrawEraseLayer();
+        }
         requestDraw(); updateThumbnails(); updateFooterButtons();
 
         showToast('🗑️ Đã xoá bóng thoại', {
@@ -874,7 +1253,9 @@
             if (b.hasAttribute('aria-pressed')) b.setAttribute('aria-pressed', String(b.id === 'tool-' + tool));
         });
         if (tool !== 'select') { selectedBlockIdx = -1; updateBlockEditor(-1); }
-        mainCanvas.style.cursor = (tool === 'add' || tool === 'delete') ? 'crosshair' : 'default';
+        const eraseTool = (tool === 'erase-rect' || tool === 'erase-brush');
+        if (!eraseTool) lastPointerPos = null;
+        mainCanvas.style.cursor = (tool === 'add' || tool === 'delete' || eraseTool) ? 'crosshair' : 'default';
         hoveredDeleteIdx = -1;
         updateHints();
         requestDraw();
@@ -884,7 +1265,11 @@
     function updateHints() {
         if (!hintsBar) return;
         let msg = '';
-        if (currentTool === 'delete') {
+        if (currentTool === 'erase-rect') {
+            msg = '▭ Kéo trên ảnh để xoá vùng hình chữ nhật (text gốc/SFX còn sót) · vùng nhỏ hơn 4×4px bị bỏ qua · ↩ Undo chỉ khôi phục hiển thị, vùng xoá vẫn render sạch · Esc để thoát';
+        } else if (currentTool === 'erase-brush') {
+            msg = '🖌 Vẽ tự do để xoá text gốc/SFX còn sót · Cỡ cọ ' + brushSize + 'px (đổi ở toolbar) · ↩ Undo chỉ khôi phục hiển thị, vùng xoá vẫn render sạch · Esc để thoát';
+        } else if (currentTool === 'delete') {
             msg = isPostrender
                 ? '🖱️ Nhấp vào bóng thoại để xoá (vùng đó sẽ được xoá nền, không render chữ) · kéo lướt qua sẽ không xoá · Esc để thoát'
                 : '🖱️ Nhấp vào bóng thoại để xoá (text gốc sẽ giữ nguyên trên ảnh kết quả) · kéo lướt qua sẽ không xoá · Esc để thoát';
@@ -931,11 +1316,16 @@
     // ---- Re-render (F5, F7) ----
     function currentBlocksPayload() {
         const img = images[currentImageIdx];
-        return (img.blocks || []).map(b => ({
-            text: b.text || '',
-            translated: b.translated || '',
-            bbox: b.bbox ? [...b.bbox] : null
-        }));
+        return (img.blocks || []).map(b => {
+            const item = {
+                text: b.text || '',
+                translated: b.translated || '',
+                bbox: b.bbox ? [...b.bbox] : null
+            };
+            // V3: style rides along (spec 4.6/P1 pass-through for postrender too).
+            if (b.style) item.style = { ...b.style };
+            return item;
+        });
     }
 
     function setBusy(busy, busyLabel) {
@@ -950,11 +1340,12 @@
             }
         }
         updateFooterButtons();
-        mainCanvas.style.cursor = busy ? 'wait' : ((currentTool === 'add' || currentTool === 'delete') ? 'crosshair' : 'default');
+        const eraseTool = (currentTool === 'erase-rect' || currentTool === 'erase-brush');
+        mainCanvas.style.cursor = busy ? 'wait' : ((currentTool === 'add' || currentTool === 'delete' || eraseTool) ? 'crosshair' : 'default');
     }
 
     function updateFooterButtons() {
-        if (!isPostrender) return;
+        if (!isPostrender && !isStyleditor) return;
         const one = document.getElementById('btn-rerender-one');
         const all = document.getElementById('btn-save-all');
         const img = images[currentImageIdx];
@@ -965,6 +1356,7 @@
     function rerenderCurrentImage(opts) {
         const o = opts || {};
         const navigateAfter = !!o.navigateAfter;
+        const busyLabel = o.busyLabel || '⏳ Đang render…';
         if (isBusy) return;
         const img = images[currentImageIdx];
         if (!img) return;
@@ -975,9 +1367,15 @@
             blocks_json: JSON.stringify(currentBlocksPayload()),
             deleted_regions_json: JSON.stringify((img.deletedRegions || []).map(r => [...r]))
         };
+        if (isStyleditor) {
+            // V3 F7: canonical erase payload — monotonic eraseRegions + mask.
+            payload.erase_regions_json = JSON.stringify((img.eraseRegions || []).map(r => [...r]));
+            const mask = buildEraseMask();
+            if (mask) payload.erase_mask = mask;
+        }
 
         const run = () => {
-            setBusy(true, '⏳ Đang render…');
+            setBusy(true, busyLabel);
             const form = new FormData();
             for (const k in payload) form.append(k, payload[k]);
             fetch('/re-render-image', { method: 'POST', body: form })
@@ -991,20 +1389,38 @@
                     return data;
                 })
                 .then(data => {
-                    img.data = data.data;
-                    delete imageCache[currentImageIdx];
-                    img.blocks = (data.blocks || []).map(b => ({
-                        text: b.text || '',
-                        translated: b.translated || '',
-                        bbox: b.bbox ? [...b.bbox] : null
-                    }));
-                    img.deletedRegions = [];
-                    img.dirty = false;
-                    selectedBlockIdx = -1;
-                    updateBlockEditor(-1);
-                    loadImage(currentImageIdx).then(() => {
-                        fitCanvas(); requestDraw(); updateThumbnails(); updateNavButtons(); updateFooterButtons();
-                    });
+                    if (isStyleditor) {
+                        // V3 1.5: editor ALWAYS keeps the erased background +
+                        // live text layer (never switches to the baked image).
+                        // Adopt server-normalized blocks (bbox/style), clear dirty.
+                        img.blocks = (data.blocks || []).map(b => ({
+                            text: b.text || '',
+                            translated: b.translated || '',
+                            bbox: b.bbox ? [...b.bbox] : null,
+                            style: b.style ? { ...b.style } : null
+                        }));
+                        img.dirty = false;
+                        clearDirtyBadge(globalImageIdx);
+                        removeDraftState(globalImageIdx);
+                        selectedBlockIdx = -1;
+                        updateBlockEditor(-1);
+                        requestDraw(); updateThumbnails(); updateFooterButtons();
+                    } else {
+                        img.data = data.data;
+                        delete imageCache[currentImageIdx];
+                        img.blocks = (data.blocks || []).map(b => ({
+                            text: b.text || '',
+                            translated: b.translated || '',
+                            bbox: b.bbox ? [...b.bbox] : null
+                        }));
+                        img.deletedRegions = [];
+                        img.dirty = false;
+                        selectedBlockIdx = -1;
+                        updateBlockEditor(-1);
+                        loadImage(currentImageIdx).then(() => {
+                            fitCanvas(); requestDraw(); updateThumbnails(); updateNavButtons(); updateFooterButtons();
+                        });
+                    }
                     if (navigateAfter) {
                         window.location.href = '/translate-result/' + sessionId;
                         return;
@@ -1030,17 +1446,134 @@
         run();
     }
 
+    // V3 (chốt captain 8.3 + backend contract): "Lưu tất cả" renders EVERY
+    // dirty image sequentially via /re-render-image (current page uses live
+    // state; other pages replay their persisted draft state), showing
+    // "⏳ Đang render ảnh i/n" on a locked button, clearing each image's dirty
+    // badge as it finishes, then redirects to the results page.
     function saveAll() {
         if (isBusy) return;
+        if (isStyleditor) { saveAllStyleditor(); return; }
         const img = images[currentImageIdx];
         if (img && img.dirty) {
-            // Persist this image through the single-image endpoint (the
-            // /re-render-all endpoint renders from the server's persisted plan,
-            // so edits must be saved first), then open the results page.
-            rerenderCurrentImage({ navigateAfter: true });
+            const label = '⏳ Đang render…';
+            showToast(label, { variant: 'info', duration: 6000 });
+            rerenderCurrentImage({ navigateAfter: true, busyLabel: label });
         } else {
             window.location.href = '/translate-result/' + sessionId;
         }
+    }
+
+    function buildSaveAllPayload(idx) {
+        let state = null;
+        if (idx === globalImageIdx && images[0]) {
+            const cur = images[0];
+            const imgEl = imageCache[currentImageIdx];
+            state = {
+                blocks: (cur.blocks || []).map(b => ({
+                    text: b.text || '', translated: b.translated || '',
+                    bbox: b.bbox ? [...b.bbox] : null,
+                    style: b.style ? { ...b.style } : null
+                })),
+                eraseRegions: (cur.eraseRegions || []).map(r => [...r]),
+                deletedRegions: (cur.deletedRegions || []).map(r => [...r]),
+                strokes: (cur.eraseStrokes || []).map(s => ({
+                    points: (s.points || []).map(pt => [pt[0], pt[1]]), size: s.size, color: s.color
+                })),
+                w: imgEl ? imgEl.width : 0,
+                h: imgEl ? imgEl.height : 0
+            };
+        } else {
+            state = readDraftState(idx);
+        }
+        if (!state) return null;
+        const payload = {
+            session_id: sessionId,
+            image_idx: String(idx),
+            idx: idx,
+            blocks_json: JSON.stringify(state.blocks || []),
+            erase_regions_json: JSON.stringify((state.eraseRegions || []).map(r => [...r])),
+            deleted_regions_json: JSON.stringify((state.deletedRegions || []).map(r => [...r]))
+        };
+        const mask = buildEraseMaskFor(state.strokes || [], state.w, state.h);
+        if (mask) payload.erase_mask = mask;
+        return payload;
+    }
+
+    function saveAllStyleditor() {
+        const curImg = images[currentImageIdx];
+        const badges = readDirtyBadges();
+        const dirty = [];
+        if (curImg && curImg.dirty) dirty.push(globalImageIdx);
+        Object.keys(badges).forEach(k => {
+            const idx = parseInt(k, 10);
+            if (!isNaN(idx) && idx !== globalImageIdx && badges[k] && readDraftState(idx)) dirty.push(idx);
+        });
+        if (!dirty.length) {
+            window.location.href = '/translate-result/' + sessionId;
+            return;
+        }
+        dirty.sort((a, b) => a - b);
+        const payloads = dirty.map(buildSaveAllPayload).filter(Boolean);
+        if (!payloads.length) {
+            window.location.href = '/translate-result/' + sessionId;
+            return;
+        }
+        let i = 0;
+        const runNext = () => {
+            if (i >= payloads.length) {
+                window.location.href = '/translate-result/' + sessionId;
+                return;
+            }
+            const p = payloads[i];
+            const label = '⏳ Đang render ảnh ' + (i + 1) + '/' + payloads.length;
+            setBusy(true, label);
+            showToast(label, { variant: 'info', duration: 6000 });
+            const form = new FormData();
+            for (const k in p) form.append(k, p[k]);
+            fetch('/re-render-image', { method: 'POST', body: form })
+                .then(async r => {
+                    const data = await r.json().catch(() => ({}));
+                    if (!r.ok) {
+                        const err = new Error(data.error || ('HTTP ' + r.status));
+                        err.status = r.status;
+                        throw err;
+                    }
+                    return data;
+                })
+                .then(data => {
+                    if (p.idx === globalImageIdx && images[0]) {
+                        // adopt server-normalized blocks for the visible image
+                        images[0].blocks = (data.blocks || []).map(b => ({
+                            text: b.text || '', translated: b.translated || '',
+                            bbox: b.bbox ? [...b.bbox] : null,
+                            style: b.style ? { ...b.style } : null
+                        }));
+                        images[0].dirty = false;
+                        updateBlockEditor(-1);
+                        requestDraw();
+                    }
+                    clearDirtyBadge(p.idx);
+                    removeDraftState(p.idx);
+                    i++;
+                    runNext();
+                })
+                .catch(err => {
+                    setBusy(false);
+                    if (err.status === 404) {
+                        showToast('Phiên đã hết hạn', { variant: 'error', duration: 3000 });
+                        setTimeout(() => { window.location.href = '/'; }, 2000);
+                    } else if (err.status === 422) {
+                        showToast('Toạ độ bbox không hợp lệ ở ảnh ' + (p.idx + 1), { variant: 'error', duration: 4000 });
+                    } else {
+                        showToast('Không thể render ảnh ' + (p.idx + 1) + '/' + payloads.length, {
+                            variant: 'error', duration: 6000, actionLabel: 'Thử lại',
+                            onAction: runNext
+                        });
+                    }
+                });
+        };
+        runNext();
     }
 
     // ---- Buttons ----
@@ -1054,6 +1587,16 @@
     if (toolDelete) toolDelete.addEventListener('click', () => setTool('delete'));
     if (toolUndo) toolUndo.addEventListener('click', undo);
     if (toolRedo) toolRedo.addEventListener('click', redo);
+    const toolEraseRect = document.getElementById('tool-erase-rect');
+    const toolEraseBrush = document.getElementById('tool-erase-brush');
+    const brushSizeSel = document.getElementById('brush-size');
+    if (toolEraseRect) toolEraseRect.addEventListener('click', () => setTool('erase-rect'));
+    if (toolEraseBrush) toolEraseBrush.addEventListener('click', () => setTool('erase-brush'));
+    if (brushSizeSel) brushSizeSel.addEventListener('change', () => {
+        brushSize = parseInt(brushSizeSel.value, 10) || 12;
+        updateHints();
+        requestDraw();
+    });
     document.getElementById('zoom-out').addEventListener('click', () => setZoom(zoomLevel / ZOOM_STEP));
     document.getElementById('zoom-in').addEventListener('click', () => setZoom(zoomLevel * ZOOM_STEP));
     document.getElementById('zoom-fit').addEventListener('click', () => { zoomLevel = 1; fitCanvas(); });
@@ -1109,9 +1652,19 @@
     if (editorClose) editorClose.addEventListener('click', () => setEditorOpen(false));
 
     function switchImage(idx) {
+        if (isStyleditor) {
+            // V3 2.2: each editor page loads ONE image; switching reloads the
+            // page with ?img=<idx> (server-side per-image state).
+            if (idx < 0 || idx >= allImages.length) return;
+            window.location.href = '/styleditor/' + sessionId + '?img=' + idx;
+            return;
+        }
         currentImageIdx = idx; selectedBlockIdx = -1; updateBlockEditor(-1);
         loadImage(idx).then(() => { fitCanvas({ resetZoom: true }); requestDraw(); updateThumbnails(); updateNavButtons(); updateFooterButtons(); });
     }
+
+    // V3: global page index used for navigation in styleditor mode.
+    function navImageIdx() { return isStyleditor ? globalImageIdx : currentImageIdx; }
 
     function fitCanvas(options) {
         const o = options || {};
@@ -1133,6 +1686,15 @@
 
     function updateNavButtons() {
         if (isPostrender) return;
+        const idx = navImageIdx();
+        if (isStyleditor) {
+            const img = allImages[idx] || images[0];
+            if (btnPrev) btnPrev.disabled = idx === 0;
+            if (btnNext) btnNext.disabled = idx >= allImages.length - 1;
+            currentImageLabel.textContent = (img ? img.name : '') + ' (' + (idx + 1) + '/' + allImages.length + ')';
+            updateCanvasAria();
+            return;
+        }
         if (btnPrev) btnPrev.disabled = currentImageIdx === 0;
         if (btnNext) btnNext.disabled = currentImageIdx === images.length - 1;
         currentImageLabel.textContent = images[currentImageIdx].name + ' (' + (currentImageIdx + 1) + '/' + images.length + ')';
@@ -1143,10 +1705,11 @@
         const img = images[currentImageIdx];
         if (!img) return;
         const n = (img.blocks || []).length;
-        const dirty = isPostrender && img.dirty;
+        const dirty = (isPostrender || isStyleditor) && img.dirty;
+        const label = isStyleditor ? 'Ảnh đã xoá text và vẽ chữ dịch ' : (isPostrender ? 'Ảnh đã dịch ' : 'Ảnh ');
         mainCanvas.setAttribute('role', 'img');
         mainCanvas.setAttribute('aria-label',
-            (isPostrender ? 'Ảnh đã dịch ' : 'Ảnh ') + (img.name || '') +
+            label + (img.name || '') +
             ' — ' + n + ' bóng thoại' + (dirty ? ', có thay đổi chưa render' : ''));
     }
 
@@ -1161,10 +1724,18 @@
         }
         items.forEach(el => {
             const idx = parseInt(el.dataset.index);
+            const img = images[idx];
             const countEl = el.querySelector('.thumb-count');
-            if (countEl) countEl.textContent = images[idx].blocks.length + ' blocks';
-            // F4: dirty badge on thumbs with un-rendered changes (P0)
-            el.classList.toggle('dirty', isPostrender && !!images[idx].dirty);
+            if (countEl) countEl.textContent = img ? (img.blocks.length + ' blocks') : '—';
+            // F4: dirty badge on thumbs with un-rendered changes (P0 current
+            // image; P1 whole session via localStorage — spec 2.2).
+            if (isStyleditor) {
+                const badges = readDirtyBadges();
+                const badged = !!badges[idx] || (idx === globalImageIdx && !!images[0] && images[0].dirty);
+                el.classList.toggle('dirty', badged);
+            } else {
+                el.classList.toggle('dirty', isPostrender && !!images[idx].dirty);
+            }
             renderThumbnail(idx);
         });
         document.getElementById('total-blocks').textContent = images.reduce((s, i) => s + i.blocks.length, 0);
@@ -1173,11 +1744,38 @@
 
     function renderThumbnail(idx) {
         loadImage(idx).then(img => {
-            if (!img) return;
             const el = document.querySelector('.thumb-item[data-index="' + idx + '"]');
             if (!el) return;
             const tc = el.querySelector('.thumb-canvas');
             if (!tc) return;
+            if (!img) {
+                // V3: remote images (other pages) have no b64 payload — show a
+                // neutral placeholder (spec 4.2: all_images carries names only).
+                const rect = tc.getBoundingClientRect();
+                const thumbW = Math.max(80, Math.round(rect.width || 150));
+                const thumbH = Math.max(60, Math.round(rect.height || 102));
+                const key = 'empty:' + thumbW + 'x' + thumbH;
+                if (thumbnailKeys[idx] === key) return;
+                thumbnailKeys[idx] = key;
+                const tctx = tc.getContext('2d');
+                const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+                tc.width = Math.round(thumbW * dpr);
+                tc.height = Math.round(thumbH * dpr);
+                tctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                tctx.clearRect(0, 0, thumbW, thumbH);
+                tctx.fillStyle = '#e7dfee';
+                tctx.fillRect(0, 0, thumbW, thumbH);
+                tctx.fillStyle = '#a891bb';
+                tctx.font = '600 22px "Exo 2", sans-serif';
+                tctx.textAlign = 'center';
+                tctx.textBaseline = 'middle';
+                tctx.fillText('🖼', thumbW / 2, thumbH / 2 - 10);
+                tctx.font = '500 11px "Exo 2", sans-serif';
+                const name = (allImages[idx] || {}).name || '';
+                tctx.fillText(name.substring(0, 14), thumbW / 2, thumbH / 2 + 16);
+                tctx.textAlign = 'start';
+                return;
+            }
             const blocks = getBlocks(idx);
             const rect = tc.getBoundingClientRect();
             const thumbW = Math.max(80, Math.round(rect.width || 150));
@@ -1226,10 +1824,655 @@
         });
     });
 
+    // ═══════════════════════════════════════════════════════════════════
+    // V3 Style editor engine (spec F3-F9): fonts, live WYSIWYG text,
+    // background erase (rect/brush + monotonic regions + mask), style panel.
+    // ═══════════════════════════════════════════════════════════════════
+
+    function clampInt(v, lo, hi) {
+        const n = parseInt(v, 10);
+        return isNaN(n) ? lo : Math.max(lo, Math.min(hi, n));
+    }
+
+    // ---- Fonts (F8): /api/fonts + /font-file + FontFace ----
+    function fontFamilyFor(name) {
+        const n = String(name || DEFAULT_STYLE.font).replace(/"/g, '');
+        return '"' + n + '"';
+    }
+    function ensureFontLoaded(name) {
+        const family = String(name || '').replace(/"/g, '');
+        if (!family) return Promise.resolve();
+        if (fontFailures[family]) return Promise.resolve();
+        if (fontLoads[family]) return fontLoads[family];
+        try {
+            if (document.fonts && document.fonts.check('16px "' + family + '"')) return Promise.resolve();
+        } catch (_) { /* older browsers */ }
+        fontLoads[family] = new Promise((resolve) => {
+            let ff;
+            try {
+                ff = new FontFace(family, 'url(/font-file/' + encodeURIComponent(family) + ')');
+            } catch (err) {
+                fontFailures[family] = true;
+                delete fontLoads[family];
+                showToast('⚠️ Không tải được font ' + family, { variant: 'error', duration: 4000 });
+                resolve();
+                return;
+            }
+            ff.load().then(f => {
+                document.fonts.add(f);
+                fontReady[family] = true;
+                resolve();
+            }).catch(() => {
+                fontFailures[family] = true;
+                delete fontLoads[family];
+                showToast('⚠️ Không tải được font ' + family + ' — dùng font mặc định', { variant: 'error', duration: 4000 });
+                resolve();
+            });
+        });
+        return fontLoads[family];
+    }
+    function initFonts() {
+        fetch('/api/fonts')
+            .then(r => r.json())
+            .then(d => {
+                fontList = Array.isArray(d.fonts) ? d.fonts : [];
+                populateFontOptions();
+            })
+            .catch(() => {
+                const cur = (images[0] && images[0].blocks && images[0].blocks[0] && images[0].blocks[0].style)
+                    ? images[0].blocks[0].style.font : DEFAULT_STYLE.font;
+                fontList = [{ name: cur, label: cur }];
+                populateFontOptions();
+                showToast('⚠️ Không tải được danh sách phông chữ', { variant: 'error', duration: 4000 });
+            });
+    }
+    function populateFontOptions() {
+        const sel = document.getElementById('style-font');
+        if (!sel) return;
+        const cur = sel.value || '';
+        const seen = {};
+        const options = [];
+        fontList.forEach(f => {
+            const name = String(f.name || f.label || '');
+            if (!name || seen[name]) return;
+            seen[name] = true;
+            options.push('<option value="' + escapeHtml(name) + '">' + escapeHtml(String(f.label || name)) + '</option>');
+        });
+        if (cur && !seen[cur]) options.unshift('<option value="' + escapeHtml(cur) + '">' + escapeHtml(cur) + '</option>');
+        sel.innerHTML = options.join('');
+        if (cur) sel.value = cur;
+        else if (fontList.length) sel.value = fontList[0].name;
+    }
+
+    // ---- WYSIWYG text layout: client mirror of add_text.py (spec F6.2) ----
+    function cleanStyledText(text) {
+        if (!text) return '';
+        return String(text)
+            .replace(/\s*\n\s*/g, ' ')
+            .replace(/[ \t]{2,}/g, ' ')
+            .trim();
+    }
+    function wrapTextAtSize(text, size, usableW, useCharWrap, family) {
+        const lines = [];
+        const measure = (s) => {
+            ctx.font = size + 'px ' + family;
+            return ctx.measureText(s).width;
+        };
+        if (useCharWrap) {
+            let current = '';
+            for (const ch of text) {
+                if (ch === '\n') {
+                    if (current) { lines.push(current); current = ''; }
+                    continue;
+                }
+                const test = current + ch;
+                if (measure(test) > usableW && current) { lines.push(current); current = ch; }
+                else current = test;
+            }
+            if (current) lines.push(current);
+        } else {
+            const words = text.split(' ');
+            let current = '';
+            for (const word of words) {
+                if (!word) continue;
+                const sep = current ? ' ' : '';
+                const test = current + sep + word;
+                if (measure(test) > usableW) {
+                    if (current) lines.push(current);
+                    current = word;
+                    if (measure(word) > usableW) {
+                        const charLines = [];
+                        let chunk = '';
+                        for (const ch of word) {
+                            const tc = chunk + ch;
+                            if (measure(tc) > usableW && chunk) { charLines.push(chunk); chunk = ch; }
+                            else chunk = tc;
+                        }
+                        if (chunk) charLines.push(chunk);
+                        lines.push.apply(lines, charLines.slice(0, -1));
+                        if (charLines.length === 1 && lines.length === 0) {
+                            lines.push(charLines[0]);
+                            current = '';
+                        } else {
+                            current = charLines.length ? charLines[charLines.length - 1] : '';
+                        }
+                    }
+                } else current = test;
+            }
+            if (current) lines.push(current);
+        }
+        return lines.length ? lines : [text];
+    }
+    function linesFitAtSize(lines, size, usableW, family) {
+        ctx.font = size + 'px ' + family;
+        for (const line of lines) {
+            if (ctx.measureText(line).width > usableW) return false;
+        }
+        return true;
+    }
+    function computeStyledLayout(block, blockIdx) {
+        const textRaw = cleanStyledText(block.translated);
+        if (!textRaw) return null;
+        const style = normalizeStyle(block.style);
+        const family = fontFamilyFor(style.font);
+        const bbox = block.bbox;
+        if (!bbox || bbox.length !== 4) return null;
+        const w = bbox[2] - bbox[0], h = bbox[3] - bbox[1];
+        if (w <= 0 || h <= 0) return null;
+        let usableW = Math.floor(w * (1 - 2 * 0.12));
+        let usableH = Math.floor(h * (1 - 2 * 0.12));
+        if (usableW <= 0 || usableH <= 0) { usableW = w; usableH = h; }
+        const hasCJK = /[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(textRaw);
+        const useCharWrap = hasCJK && textRaw.indexOf(' ') < 0;
+
+        const fixed = clampInt(style.font_size, 0, 120);
+        if (fixed) {
+            if (fixed <= 12) {
+                const lines = wrapTextAtSize(textRaw, fixed, usableW, useCharWrap, family);
+                return { family, size: fixed, lines, lineHeight: Math.floor(fixed * 1.3) };
+            }
+            let best = 0, bestLines = null;
+            let lo = 12, hi = fixed;
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const lh = Math.floor(mid * 1.3);
+                const lines = wrapTextAtSize(textRaw, mid, usableW, useCharWrap, family);
+                if (lines.length * lh <= usableH && linesFitAtSize(lines, mid, usableW, family)) {
+                    best = mid; bestLines = lines; lo = mid + 1;
+                } else hi = mid - 1;
+            }
+            if (best) return { family, size: best, lines: bestLines, lineHeight: Math.floor(best * 1.3) };
+            // Nothing ≥ 12 fits → fall through to the auto search (server mirror).
+        }
+
+        const area = usableW * usableH;
+        const chars = Math.max(textRaw.length, 1);
+        const estimated = Math.round(Math.sqrt(area / (chars * 0.8)));
+        const guess = Math.max(12, Math.min(60, estimated));
+        let best = 0, bestLines = null;
+        let lo = 12, hi = guess;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const lh = Math.floor(mid * 1.3);
+            const lines = wrapTextAtSize(textRaw, mid, usableW, useCharWrap, family);
+            if (lines.length * lh <= usableH && linesFitAtSize(lines, mid, usableW, family)) {
+                best = mid; bestLines = lines; lo = mid + 1;
+            } else hi = mid - 1;
+        }
+        const size = best || 12;
+        const lines = bestLines || wrapTextAtSize(textRaw, size, usableW, useCharWrap, family);
+        return { family, size, lines, lineHeight: Math.floor(size * 1.3) };
+    }
+    function getStyledLayout(block, blockIdx) {
+        const key = currentImageIdx + ':' + blockIdx + ':' + (block.bbox || []).join(',') + ':' +
+            cleanStyledText(block.translated) + ':' + JSON.stringify(normalizeStyle(block.style));
+        if (layoutCache[key]) return layoutCache[key];
+        const layout = computeStyledLayout(block, blockIdx);
+        layoutCache[key] = layout;
+        return layout;
+    }
+
+    // ---- Auto text color (F5.5): luminance of the erased bg inside bbox ----
+    function getAutoTextColor(block, blockIdx) {
+        const key = currentImageIdx + ':' + blockIdx + ':' + (block.bbox || []).join(',');
+        if (autoColorCache[key]) return autoColorCache[key];
+        let color = '#000000';
+        const img = imageCache[currentImageIdx];
+        const bbox = block.bbox;
+        if (img && bbox && bgCanvas.width) {
+            try {
+                const X1 = clamp(Math.round(bbox[0]), 0, img.width - 1);
+                const Y1 = clamp(Math.round(bbox[1]), 0, img.height - 1);
+                const X2 = clamp(Math.round(bbox[2]), X1 + 1, img.width);
+                const Y2 = clamp(Math.round(bbox[3]), Y1 + 1, img.height);
+                const g = bgCanvas.getContext('2d');
+                const data = g.getImageData(X1, Y1, X2 - X1, Y2 - Y1).data;
+                let lum = 0, n = 0;
+                for (let i = 0; i < data.length; i += 16) {
+                    lum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                    n++;
+                }
+                if (n > 0) { lum /= n; color = lum < 128 ? '#ffffff' : '#000000'; }
+            } catch (_) { /* sampling fallback */ }
+        }
+        autoColorCache[key] = color;
+        return color;
+    }
+
+    // ---- Live styled text drawing (F3.1/F6): mirror of _draw_text_on_pil ----
+    function drawStyledBlockText(block, blockIdx) {
+        const style = normalizeStyle(block.style);
+        const layout = getStyledLayout(block, blockIdx);
+        if (!layout) return;
+        const color = style.text_color ? style.text_color : getAutoTextColor(block, blockIdx);
+        const bold = !!style.bold;
+        const italic = !!style.italic;
+        const align = (style.align === 'left' || style.align === 'right') ? style.align : 'center';
+        const bbox = block.bbox;
+        const [x1, y1, x2, y2] = bbox;
+        const bw = x2 - x1, bh = y2 - y1;
+        const totalH = layout.lines.length * layout.lineHeight;
+        const textY = y1 + Math.floor((bh - totalH) / 2);
+        const padding = Math.round(bw * 0.12);
+        ctx.save();
+        ctx.font = layout.size + 'px ' + layout.family;
+        ctx.textBaseline = 'top';
+        ctx.fillStyle = color;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;      // bold = synthetic stroke, PIL stroke_width=2 (F5.6)
+        ctx.lineJoin = 'round';
+        for (let i = 0; i < layout.lines.length; i++) {
+            const line = layout.lines[i];
+            ctx.font = layout.size + 'px ' + layout.family;
+            const lw = ctx.measureText(line).width;
+            let textX;
+            if (align === 'left') textX = x1 + padding;
+            else if (align === 'right') textX = x2 - padding - lw;
+            else textX = x1 + Math.floor((bw - lw) / 2);
+            const yLine = textY + i * layout.lineHeight;
+            ctx.save();
+            if (italic) ctx.transform(1, 0.18, 0, 1, textX, yLine);  // shear 0.18 (F5.7)
+            const dx = italic ? 0 : textX;
+            const dy = italic ? 0 : yLine;
+            if (bold) ctx.strokeText(line, dx, dy);
+            ctx.fillText(line, dx, dy);
+            ctx.restore();
+        }
+        ctx.restore();
+        // Kick a font load so the first paint (sans-serif) re-renders in the
+        // real TTF as soon as it arrives (F8.3). Guarded by fontReady so a
+        // resolved promise never re-schedules draws (no infinite loop).
+        const fam = String(style.font || '').replace(/"/g, '');
+        if (fam && !fontReady[fam] && !fontFailures[fam]) {
+            ensureFontLoaded(style.font).then(requestDraw);
+        }
+    }
+
+    // ---- Erase layer (F4): bg sampling + rect fills + brush strokes ----
+    function initBgCanvas() {
+        const img = imageCache[currentImageIdx];
+        if (!img) return;
+        bgCanvas.width = img.width;
+        bgCanvas.height = img.height;
+        bgCanvas.getContext('2d').drawImage(img, 0, 0);
+    }
+    function sampleColorAt(pos) {
+        const img = imageCache[currentImageIdx];
+        if (!img || !bgCanvas.width) return '#ffffff';
+        const r = 2;
+        const x = clamp(Math.round(pos.x) - r, 0, Math.max(0, img.width - 1));
+        const y = clamp(Math.round(pos.y) - r, 0, Math.max(0, img.height - 1));
+        const w = Math.min(2 * r + 1, img.width - x);
+        const h = Math.min(2 * r + 1, img.height - y);
+        if (w <= 0 || h <= 0) return '#ffffff';
+        try {
+            const g = bgCanvas.getContext('2d');
+            const data = g.getImageData(x, y, w, h).data;
+            let rs = 0, gs = 0, bs = 0, n = 0;
+            for (let i = 0; i < data.length; i += 4) { rs += data[i]; gs += data[i + 1]; bs += data[i + 2]; n++; }
+            return n ? 'rgb(' + Math.round(rs / n) + ',' + Math.round(gs / n) + ',' + Math.round(bs / n) + ')' : '#ffffff';
+        } catch (_) { return '#ffffff'; }
+    }
+    function sampleEdgeColor(region) {
+        const img = imageCache[currentImageIdx];
+        if (!img || !bgCanvas.width) return '#ffffff';
+        const key = currentImageIdx + ':' + region.join(',');
+        if (edgeColorCache[key]) return edgeColorCache[key];
+        const W = img.width, H = img.height;
+        const X1 = clamp(Math.round(region[0]), 0, W - 1);
+        const Y1 = clamp(Math.round(region[1]), 0, H - 1);
+        const X2 = clamp(Math.round(region[2]), 0, W);
+        const Y2 = clamp(Math.round(region[3]), 0, H);
+        const rw = X2 - X1 + 1, rh = Y2 - Y1 + 1;
+        let color = '#ffffff';
+        try {
+            const g = bgCanvas.getContext('2d');
+            const data = g.getImageData(X1, Y1, rw, rh).data;
+            const at = (x, y) => {
+                const i = ((y - Y1) * rw + (x - X1)) * 4;
+                return [data[i], data[i + 1], data[i + 2]];
+            };
+            let rs = 0, gs = 0, bs = 0, n = 0;
+            const addPx = (p) => { rs += p[0]; gs += p[1]; bs += p[2]; n++; };
+            for (let x = X1; x <= X2; x += 3) { addPx(at(x, Y1)); addPx(at(x, Math.min(Y2, H - 1))); }
+            for (let y = Y1; y <= Y2; y += 3) { addPx(at(X1, y)); addPx(at(Math.min(X2, W - 1), y)); }
+            if (n > 0) color = 'rgb(' + Math.round(rs / n) + ',' + Math.round(gs / n) + ',' + Math.round(bs / n) + ')';
+        } catch (_) { /* fallback */ }
+        edgeColorCache[key] = color;
+        return color;
+    }
+    function redrawEraseLayer() {
+        const img = imageCache[currentImageIdx];
+        if (!img) return;
+        eraseLayer.width = img.width;
+        eraseLayer.height = img.height;
+        const lctx = eraseLayer.getContext('2d');
+        lctx.clearRect(0, 0, img.width, img.height);
+        const cur = images[currentImageIdx];
+        if (!cur) return;
+        // P1: persisted erase mask composites first (monotonic, survives undo).
+        if (cur.eraseMaskLayer) lctx.drawImage(cur.eraseMaskLayer, 0, 0);
+        (cur.erasePreviewRects || []).forEach(region => {
+            lctx.fillStyle = sampleEdgeColor(region);
+            lctx.fillRect(region[0], region[1], region[2] - region[0], region[3] - region[1]);
+        });
+        (cur.eraseStrokesPreview || []).forEach(s => {
+            const pts = s.points || [];
+            if (!pts.length) return;
+            lctx.strokeStyle = s.color;
+            lctx.fillStyle = s.color;
+            lctx.lineWidth = s.size;
+            lctx.lineCap = 'round';
+            lctx.lineJoin = 'round';
+            if (pts.length === 1) {
+                lctx.beginPath();
+                lctx.arc(pts[0][0], pts[0][1], s.size / 2, 0, Math.PI * 2);
+                lctx.fill();
+                return;
+            }
+            lctx.beginPath();
+            lctx.moveTo(pts[0][0], pts[0][1]);
+            for (let i = 1; i < pts.length; i++) lctx.lineTo(pts[i][0], pts[i][1]);
+            lctx.stroke();
+        });
+    }
+    function paintBrushPoint(pos) {
+        const img = imageCache[currentImageIdx];
+        if (!img || eraseLayer.width !== img.width) return;
+        if (!strokeColor) strokeColor = sampleColorAt(pos);
+        const lctx = eraseLayer.getContext('2d');
+        lctx.strokeStyle = strokeColor;
+        lctx.fillStyle = strokeColor;
+        lctx.lineWidth = brushSize;
+        lctx.lineCap = 'round';
+        lctx.lineJoin = 'round';
+        if (strokePoints.length <= 1) {
+            lctx.beginPath();
+            lctx.arc(pos.x, pos.y, brushSize / 2, 0, Math.PI * 2);
+            lctx.fill();
+            return;
+        }
+        const prev = strokePoints[strokePoints.length - 2];
+        lctx.beginPath();
+        lctx.moveTo(prev.x, prev.y);
+        lctx.lineTo(pos.x, pos.y);
+        lctx.stroke();
+    }
+    function strokeBBox() {
+        if (!strokePoints.length) return null;
+        const W = mainCanvas.width, H = mainCanvas.height;
+        let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+        strokePoints.forEach(p => {
+            x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y);
+            x2 = Math.max(x2, p.x); y2 = Math.max(y2, p.y);
+        });
+        return [
+            clamp(Math.round(x1), 0, W),
+            clamp(Math.round(y1), 0, H),
+            clamp(Math.round(x2), 0, W),
+            clamp(Math.round(y2), 0, H)
+        ];
+    }
+    // F4.8 (P1): PNG b64 grayscale mask (white = erase) from ALL strokes —
+    // monotonic, so undone strokes still render clean (F4.5). Long side ≤ 2048.
+    function buildEraseMask() {
+        const cur = images[currentImageIdx];
+        const strokes = (cur && cur.eraseStrokes) || [];
+        const img = imageCache[currentImageIdx];
+        if (!strokes.length || !img) return '';
+        return buildEraseMaskFor(strokes, img.width, img.height);
+    }
+    function buildEraseMaskFor(strokes, imgW, imgH) {
+        if (!strokes || !strokes.length || !imgW || !imgH) return '';
+        const scale = Math.min(1, 2048 / Math.max(imgW, imgH));
+        const w = Math.max(1, Math.round(imgW * scale));
+        const h = Math.max(1, Math.round(imgH * scale));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const g = c.getContext('2d');
+        g.fillStyle = '#000';
+        g.fillRect(0, 0, w, h);
+        g.strokeStyle = '#fff';
+        g.fillStyle = '#fff';
+        g.lineCap = 'round';
+        g.lineJoin = 'round';
+        strokes.forEach(s => {
+            g.lineWidth = Math.max(1, s.size * scale);
+            const pts = (s.points || []).map(p => [p[0] * scale, p[1] * scale]);
+            if (!pts.length) return;
+            if (pts.length === 1) {
+                g.beginPath();
+                g.arc(pts[0][0], pts[0][1], g.lineWidth / 2, 0, Math.PI * 2);
+                g.fill();
+                return;
+            }
+            g.beginPath();
+            g.moveTo(pts[0][0], pts[0][1]);
+            for (let i = 1; i < pts.length; i++) g.lineTo(pts[i][0], pts[i][1]);
+            g.stroke();
+        });
+        return c.toDataURL('image/png').split(',')[1] || '';
+    }
+
+    // ---- Per-block style (F5) ----
+    function normalizeStyle(raw) {
+        const s = Object.assign({}, DEFAULT_STYLE, raw || {});
+        if (!s.font) s.font = DEFAULT_STYLE.font;
+        s.font_size = clampInt(s.font_size, 0, 120);
+        s.text_color = (typeof s.text_color === 'string' && /^#[0-9a-fA-F]{6}$/.test(s.text_color)) ? s.text_color.toLowerCase() : null;
+        s.bold = !!s.bold;
+        s.italic = !!s.italic;
+        s.align = (s.align === 'left' || s.align === 'right') ? s.align : 'center';
+        return s;
+    }
+    function styleEqual(a, b) {
+        if (!a || !b) return a === b;
+        return (a.font || '') === (b.font || '') &&
+            (a.font_size || 0) === (b.font_size || 0) &&
+            (a.text_color || null) === (b.text_color || null) &&
+            !!a.bold === !!b.bold && !!a.italic === !!b.italic &&
+            (a.align || 'center') === (b.align || 'center');
+    }
+    function styleGroupHtml(block) {
+        const style = normalizeStyle(block.style);
+        const auto = !style.font_size;
+        return '<div class="prop-group style-group" id="style-group">' +
+            '<p class="style-group-head">Kiểu chữ</p>' +
+            '<label for="style-font">Phông chữ</label>' +
+            '<select id="style-font" class="style-font" aria-label="Phông chữ">' +
+                fontList.map(f => '<option value="' + escapeHtml(String(f.name || '')) + '">' + escapeHtml(String(f.label || f.name || '')) + '</option>').join('') +
+            '</select>' +
+            '<div class="style-size-row">' +
+                '<label for="style-size">Cỡ chữ</label>' +
+                '<input type="number" id="style-size" class="style-size" min="8" max="120" step="1" value="' + (style.font_size || '') + '" ' + (auto ? 'disabled' : '') + ' aria-label="Cỡ chữ tính bằng px">' +
+                '<label class="style-auto"><input type="checkbox" id="style-size-auto" ' + (auto ? 'checked' : '') + '> Tự động</label>' +
+            '</div>' +
+            '<p class="style-size-warn" id="style-size-warn">⚠️ Cỡ chữ sẽ được thu nhỏ cho vừa khung</p>' +
+            '<div class="style-color-row">' +
+                '<span class="style-color-label" id="style-color-label">Màu chữ</span>' +
+                '<div class="style-swatches" id="style-swatches" role="group" aria-label="Màu chữ mẫu">' +
+                    '<button type="button" class="swatch swatch-auto' + (!style.text_color ? ' swatch-active' : '') + '" data-color="" title="Tự động: đen/trắng theo nền" aria-label="Màu tự động">A</button>' +
+                    STYLE_SWATCHES.map(c => '<button type="button" class="swatch' + (style.text_color === c ? ' swatch-active' : '') + '" data-color="' + c + '" style="background:' + c + '" title="' + c + '" aria-label="Màu ' + c + '"></button>').join('') +
+                '</div>' +
+                '<input type="color" id="style-color" class="style-color" value="' + (style.text_color || '#000000') + '" aria-label="Chọn màu chữ tuỳ chỉnh">' +
+            '</div>' +
+            '<div class="style-toggles" role="group" aria-label="Kiểu đậm nghiêng">' +
+                '<button type="button" id="style-bold" class="style-btn" aria-pressed="' + (style.bold ? 'true' : 'false') + '" title="In đậm (phím B)"><b>B</b></button>' +
+                '<button type="button" id="style-italic" class="style-btn" aria-pressed="' + (style.italic ? 'true' : 'false') + '" title="In nghiêng (phím I)"><i>I</i></button>' +
+            '</div>' +
+            '<div class="style-align" role="group" aria-label="Căn lề chữ">' +
+                '<button type="button" id="align-left" class="style-btn align-btn" aria-pressed="' + (style.align === 'left' ? 'true' : 'false') + '" title="Căn trái (phím L)">⬅ Trái</button>' +
+                '<button type="button" id="align-center" class="style-btn align-btn" aria-pressed="' + (style.align === 'center' ? 'true' : 'false') + '" title="Căn giữa (phím C)">↔ Giữa</button>' +
+                '<button type="button" id="align-right" class="style-btn align-btn" aria-pressed="' + (style.align === 'right' ? 'true' : 'false') + '" title="Căn phải (phím R)">➡ Phải</button>' +
+            '</div>' +
+            '<button type="button" id="style-apply-all" class="style-apply-all">📋 Áp dụng cho tất cả block ảnh này</button>' +
+        '</div>';
+    }
+    function setBlockStyle(patch) {
+        const block = getCurrentBlocks()[selectedBlockIdx];
+        if (!block || isBusy) return;
+        const cur = normalizeStyle(block.style);
+        const merged = Object.assign({}, cur, patch);
+        if (styleEqual(cur, merged)) return;
+        pushUndo();
+        block.style = merged;
+        requestDraw();
+        markDirty(currentImageIdx);
+        refreshStylePanel();
+    }
+    function toggleStyle(key) {
+        const block = getCurrentBlocks()[selectedBlockIdx];
+        if (!block) return;
+        setBlockStyle({ [key]: !(block.style && block.style[key]) });
+    }
+    function applyStyleToAll() {
+        const block = getCurrentBlocks()[selectedBlockIdx];
+        if (!block || isBusy) return;
+        pushUndo();
+        const style = normalizeStyle(block.style);
+        getCurrentBlocks().forEach(b => { b.style = Object.assign({}, DEFAULT_STYLE, style); });
+        requestDraw();
+        markDirty(currentImageIdx);
+        updateThumbnails();
+        showToast('📋 Đã áp dụng kiểu cho tất cả block ảnh này', { duration: 2500 });
+    }
+    // P1-1 (t5): sync the editor panel's VALUES without rebuilding the DOM —
+    // used by coord blur / nudge / drag / resize so keyboard focus survives
+    // (Tab traversal A13.2).
+    function refreshBlockEditorValues() {
+        const block = getCurrentBlocks()[selectedBlockIdx];
+        if (!block) return;
+        const bbox = block.bbox;
+        if (bbox && bbox.length === 4) {
+            const setVal = (id, v) => {
+                const el = document.getElementById(id);
+                if (el) el.value = v;
+            };
+            setVal('edit-x1', bbox[0]); setVal('edit-y1', bbox[1]);
+            setVal('edit-x2', bbox[2]); setVal('edit-y2', bbox[3]);
+            const sizeEl = document.getElementById('prop-size');
+            if (sizeEl) sizeEl.textContent = (bbox[2] - bbox[0]) + '×' + (bbox[3] - bbox[1]) + ' px';
+        }
+        refreshStylePanel();
+    }
+
+    function refreshStylePanel() {
+        const block = getCurrentBlocks()[selectedBlockIdx];
+        if (!block) return;
+        const style = normalizeStyle(block.style);
+        const setPressed = (id, on) => {
+            const el = document.getElementById(id);
+            if (el) el.setAttribute('aria-pressed', on ? 'true' : 'false');
+        };
+        setPressed('style-bold', style.bold);
+        setPressed('style-italic', style.italic);
+        setPressed('align-left', style.align === 'left');
+        setPressed('align-center', style.align === 'center');
+        setPressed('align-right', style.align === 'right');
+        const autoBox = document.getElementById('style-size-auto');
+        const sizeInput = document.getElementById('style-size');
+        if (autoBox) autoBox.checked = !style.font_size;
+        if (sizeInput) { sizeInput.disabled = !!style.font_size; sizeInput.value = style.font_size || ''; }
+        const colorInput = document.getElementById('style-color');
+        if (colorInput) colorInput.value = style.text_color || '#000000';
+        document.querySelectorAll('#style-swatches .swatch').forEach(btn => {
+            const active = btn.dataset.color ? (btn.dataset.color === style.text_color) : (!style.text_color);
+            btn.classList.toggle('swatch-active', active);
+        });
+        const warn = document.getElementById('style-size-warn');
+        if (warn && style.font_size) {
+            const layout = computeStyledLayout(block, selectedBlockIdx);
+            warn.classList.toggle('show', !!(layout && layout.size < style.font_size));
+        } else if (warn) warn.classList.remove('show');
+    }
+    function bindStylePanel(block) {
+        const style = normalizeStyle(block.style);
+        const fontSel = document.getElementById('style-font');
+        const sizeInput = document.getElementById('style-size');
+        const autoBox = document.getElementById('style-size-auto');
+        const colorInput = document.getElementById('style-color');
+        const warn = document.getElementById('style-size-warn');
+        if (fontSel) {
+            fontSel.value = style.font;
+            populateFontOptions();
+            fontSel.addEventListener('change', () => {
+                const font = fontSel.value;
+                setBlockStyle({ font: font });
+                ensureFontLoaded(font).then(requestDraw);
+            });
+        }
+        if (sizeInput) {
+            sizeInput.addEventListener('change', () => {
+                let v = clampInt(sizeInput.value, 8, 120);
+                sizeInput.value = v;
+                setBlockStyle({ font_size: v });
+                if (warn) {
+                    const layout = computeStyledLayout(getCurrentBlocks()[selectedBlockIdx], selectedBlockIdx);
+                    warn.classList.toggle('show', !!(layout && layout.size < v));
+                }
+            });
+        }
+        if (autoBox) {
+            autoBox.addEventListener('change', () => {
+                if (autoBox.checked) {
+                    setBlockStyle({ font_size: 0 });
+                    if (sizeInput) sizeInput.disabled = true;
+                } else {
+                    if (sizeInput) {
+                        sizeInput.disabled = false;
+                        if (!sizeInput.value) sizeInput.value = 20;
+                        setBlockStyle({ font_size: clampInt(sizeInput.value, 8, 120) });
+                    }
+                }
+                refreshStylePanel();
+            });
+        }
+        if (colorInput) {
+            colorInput.value = style.text_color || '#000000';
+            colorInput.addEventListener('input', () => setBlockStyle({ text_color: colorInput.value }));
+        }
+        document.querySelectorAll('#style-swatches .swatch').forEach(btn => {
+            btn.addEventListener('click', () => setBlockStyle({ text_color: btn.dataset.color ? btn.dataset.color : null }));
+        });
+        const boldBtn = document.getElementById('style-bold');
+        const italicBtn = document.getElementById('style-italic');
+        if (boldBtn) boldBtn.addEventListener('click', () => toggleStyle('bold'));
+        if (italicBtn) italicBtn.addEventListener('click', () => toggleStyle('italic'));
+        document.querySelectorAll('.align-btn').forEach(btn => {
+            btn.addEventListener('click', () => setBlockStyle({
+                align: btn.id === 'align-left' ? 'left' : (btn.id === 'align-right' ? 'right' : 'center')
+            }));
+        });
+        const applyAll = document.getElementById('style-apply-all');
+        if (applyAll) applyAll.addEventListener('click', applyStyleToAll);
+    }
+
     // ---- Editor panel ----
     function updateBlockEditor(idx) {
         if (idx < 0) {
-            blockProperties.innerHTML = '<p class="no-sel">Chọn bóng thoại để chỉnh sửa</p>';
+            blockProperties.innerHTML = isStyleditor
+                ? '<p class="no-sel">Chọn bóng thoại để chỉnh sửa — bấm <kbd>[</kbd>/<kbd>]</kbd> để chọn</p>'
+                : '<p class="no-sel">Chọn bóng thoại để chỉnh sửa</p>';
             updateHints();
             return;
         }
@@ -1238,12 +2481,13 @@
 
         let editStartSnapshot = null;
         let editStartValue = null;
+        let editStartBbox = null;
         const w = block.bbox ? (block.bbox[2] - block.bbox[0]) : 0;
         const h = block.bbox ? (block.bbox[3] - block.bbox[1]) : 0;
 
-        const textareaLabel = isPostrender ? 'Bản dịch' : 'Nội dung text';
-        const textareaValue = escapeHtml(isPostrender ? (block.translated || '') : (block.text || ''));
-        const originalLine = isPostrender && block.text
+        const textareaLabel = (isPostrender || isStyleditor) ? 'Bản dịch' : 'Nội dung text';
+        const textareaValue = escapeHtml((isPostrender || isStyleditor) ? (block.translated || '') : (block.text || ''));
+        const originalLine = (isPostrender || isStyleditor) && block.text
             ? '<p class="prop-original">Gốc: ' + escapeHtml(block.text.substring(0, 60)) + '</p>' : '';
 
         blockProperties.innerHTML =
@@ -1270,6 +2514,7 @@
                     '<button type="button" class="nudge-btn" data-dx="0" data-dy="1" title="Xuống 1px">▼</button>' +
                 '</div>' +
             '</div>' +
+            (isStyleditor ? styleGroupHtml(block) : '') +
             '<div class="prop-actions">' +
                 '<button id="btn-delete-block" class="btn-delete">🗑️ Xoá bóng thoại</button>' +
             '</div>';
@@ -1286,7 +2531,7 @@
             editStartValue = null;
         });
         document.getElementById('edit-text').addEventListener('input', function () {
-            if (isPostrender) {
+            if (isPostrender || isStyleditor) {
                 block.translated = this.value;
                 markDirty(currentImageIdx);
             } else {
@@ -1299,13 +2544,16 @@
             inp.addEventListener('focus', function () {
                 editStartSnapshot = snapshot();
                 editStartValue = this.value;
+                editStartBbox = block.bbox ? [...block.bbox] : null;
             });
             inp.addEventListener('blur', function () {
-                if (editStartSnapshot && this.value !== editStartValue) {
+                const bboxChanged = editStartBbox ? !sameBbox(block.bbox, editStartBbox) : false;
+                if (editStartSnapshot && (this.value !== editStartValue || bboxChanged)) {
                     pushUndo(editStartSnapshot);
                 }
                 editStartSnapshot = null;
                 editStartValue = null;
+                editStartBbox = null;
                 // F3.4/A3.5: round + clamp on blur
                 const img = imageCache[currentImageIdx];
                 const nb = normalizeBbox([
@@ -1321,15 +2569,23 @@
                     inp.classList.add('error');
                     showToast('Bbox không hợp lệ (x2 phải > x1, y2 > y1)', { variant: 'error', duration: 3000 });
                 }
-                updateBlockEditor(selectedBlockIdx);
+                // P1-1 (t5): light refresh WITHOUT rebuilding the panel — the
+                // focused input survives, so Tab keeps moving through the
+                // coord fields → nudge → style controls → delete → footer (A13.2).
+                refreshBlockEditorValues();
                 requestDraw();
                 requestThumbnails();
-                if (isPostrender) markDirty(currentImageIdx);
+                // P2-1 (t5): only mark dirty when the bbox actually changed.
+                if ((isPostrender || isStyleditor) && bboxChanged) markDirty(currentImageIdx);
             });
             inp.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }  // F3: Enter commits
             });
             inp.addEventListener('input', () => {
+                // Robustness: if the field was mutated without a focus first
+                // (synthetic/edge input), snapshot the pre-change bbox so the
+                // blur handler can still detect the change (P2-1).
+                if (!editStartBbox) editStartBbox = block.bbox ? [...block.bbox] : null;
                 block.bbox = [
                     parseInt(document.getElementById('edit-x1').value) || 0,
                     parseInt(document.getElementById('edit-y1').value) || 0,
@@ -1347,6 +2603,8 @@
                 nudgeBlock(parseInt(btn.dataset.dx), parseInt(btn.dataset.dy), true);
             });
         });
+
+        if (isStyleditor) bindStylePanel(block);
 
         updateHints();
         // F9: on small screens, selecting a block opens the editor drawer.
@@ -1366,6 +2624,15 @@
         }));
         if (!img.deletedRegions) img.deletedRegions = [];
         img.dirty = false;
+        if (isStyleditor) {
+            // V3 F4/F9: erase state per image — eraseRegions/eraseStrokes are
+            // MONOTONIC (payload), the preview lists drive eraseLayer and undo.
+            if (!img.eraseRegions) img.eraseRegions = [];
+            if (!img.erasePreviewRects) img.erasePreviewRects = [];
+            if (!img.eraseStrokes) img.eraseStrokes = [];
+            if (!img.eraseStrokesPreview) img.eraseStrokesPreview = [];
+            (img.blocks || []).forEach(b => { b.style = normalizeStyle(b.style); });
+        }
     });
 
     // a11y base state (F10)
@@ -1380,6 +2647,20 @@
         requestThumbnails();
     });
     loadImage(0).then(() => {
+        if (isStyleditor) {
+            // A4.10: reload regions persisted by previous renders (server
+            // truth). Runs BEFORE the sessionStorage draft so an un-rendered
+            // draft (if any) overrides it.
+            loadServerEraseState();
+            // Restore this image's un-rendered edits from a previous page visit
+            // (chốt captain 8.3: navigating must not lose edits).
+            restoreDraftState();
+            initBgCanvas();
+            redrawEraseLayer();
+            initFonts();
+            // F1.5/A10.3: translator failure still opens the editor — warn once.
+            if (DATA.warning) showToast('⚠️ ' + DATA.warning, { duration: 6000 });
+        }
         fitCanvas({ resetZoom: true });
         requestDraw();
         updateNavButtons();
@@ -1390,5 +2671,11 @@
     thumbnails().forEach(el => {
         const idx = parseInt(el.dataset.index);
         renderThumbnail(idx);
+    });
+
+    // Safety net: flush the current draft on navigation (markDirty already
+    // saves on every edit; this covers any edge path).
+    window.addEventListener('beforeunload', () => {
+        if (isStyleditor) saveDraftState();
     });
 })();

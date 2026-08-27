@@ -99,7 +99,7 @@ body {
 
 .shortcuts {
     font-size: 12px;
-    color: #999;
+    color: #6b6b6b;
     margin-left: auto;
     white-space: nowrap;
     overflow: hidden;
@@ -259,7 +259,7 @@ body {
 }
 
 .no-sel {
-    color: #bbb;
+    color: #666666;
     font-size: 12px;
     font-style: italic;
 }
@@ -630,4 +630,215 @@ body {
     .corr-body.editor-open .corr-editor { transform: translateY(0); }
     .corr-canvas-wrap { min-height: 0; }
     .corr-hints { padding: 6px 12px; }
+}
+
+
+/* ════════════ V3 Style editor (mode=styleditor) — chỉ thêm, giữ nhận diện V2 ════════════ */
+
+/* ---- Erase tools (V3 F4) ---- */
+.brush-size-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  margin: 0 0 0 8px;
+}
+#brush-size {
+  height: 34px;
+  min-width: 68px;
+  padding: 0 6px;
+  border: 1px solid #d5c8df;
+  border-radius: 6px;
+  background: white;
+  color: #5E1675;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+#brush-size:hover { border-color: #5E1675; }
+#brush-size:focus-visible { outline: 2px solid #5E1675; outline-offset: 2px; }
+
+/* ---- Per-block style panel (V3 F5) ---- */
+.style-group {
+  border-top: 1px solid #eadff0;
+  padding-top: 10px;
+  margin-top: 2px;
+}
+.style-group .style-group-head {
+  font-size: 11px;
+  font-weight: 700;
+  color: #5E1675;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin: 0 0 8px;
+}
+.style-font {
+  width: 100%;
+  height: 38px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 4px 6px;
+  background: #fff;
+  font-family: inherit;
+  font-size: 13px;
+  color: #333;
+}
+.style-font:focus { outline: none; border-color: #5E1675; }
+.style-size-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.style-size {
+  width: 78px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 5px 6px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.style-size:focus { outline: none; border-color: #5E1675; }
+.style-size:disabled { opacity: 0.5; background: #f5f5f5; cursor: not-allowed; }
+.style-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+  margin: 0;
+  user-select: none;
+}
+.style-auto input {
+  width: 16px;
+  height: 16px;
+  accent-color: #5E1675;
+  cursor: pointer;
+}
+.style-color-row {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.style-color-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  width: 100%;
+}
+.style-swatches { display: flex; gap: 5px; flex-wrap: wrap; }
+.swatch {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  border: 1px solid #d5c8df;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.12s, border-color 0.12s;
+}
+.swatch:hover { border-color: #5E1675; transform: scale(1.1); }
+.swatch.swatch-active { outline: 2px solid #5E1675; outline-offset: 1px; }
+.swatch-auto {
+  background: linear-gradient(135deg, #ffffff 46%, #2b2b2b 54%);
+  border: 1px solid #b9a8c9;
+}
+.swatch-auto::after {
+  content: "A";
+  display: block;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #5E1675;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 5px;
+}
+.style-color {
+  width: 46px;
+  height: 32px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 2px;
+  cursor: pointer;
+  background: #fff;
+}
+.style-toggles,
+.style-align {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.style-btn {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border: 1px solid #d5c8df;
+  border-radius: 6px;
+  background: white;
+  color: #5E1675;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.style-btn:hover { background: #f5f0f7; border-color: #5E1675; }
+.style-btn[aria-pressed="true"] {
+  background: #5E1675;
+  color: #fff;
+  border-color: #5E1675;
+}
+.align-btn { font-size: 12px; }
+.style-apply-all {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 8px;
+  background: #f0e6f5;
+  color: #5E1675;
+  border: 1px solid #d5c8df;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+}
+.style-apply-all:hover { background: #e0cce8; }
+.style-size-warn { color: #b23c00; font-size: 11px; font-weight: 600; margin-top: 4px; display: none; }
+.style-size-warn.show { display: block; }
+
+/* ---- Focus visibility (V3) ---- */
+#brush-size:focus-visible,
+.style-font:focus-visible,
+.style-size:focus-visible,
+.style-color:focus-visible,
+.style-btn:focus-visible,
+.swatch:focus-visible,
+.style-apply-all:focus-visible {
+  outline: 2px solid #5E1675;
+  outline-offset: 2px;
+}
+
+/* ---- Reduced motion (V3) ---- */
+@media (prefers-reduced-motion: reduce) {
+  .swatch, .style-btn, .style-apply-all { transition: none !important; }
+}
+
+/* ---- Responsive / touch (V3 F12) ---- */
+@media (max-width: 699px) {
+  .tool-btn, .zoom-btn { min-height: 44px; }
+  #brush-size { min-height: 44px; }
+  .brush-size-label { align-self: center; }
 }

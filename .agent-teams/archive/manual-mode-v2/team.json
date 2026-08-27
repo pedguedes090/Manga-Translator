@@ -69,7 +69,7 @@
       "reasoningEffort": "high",
       "executionPrompt": "Tiếp quản t2 sau khi đổi provider. Trước tiên đọc docs/manual-mode-v2-spec.md bản 342 dòng và kiểm tra toàn bộ uncommitted frontend edits mà frontend-engineer cũ đã để lại trong workspace (static/js/correction.js, templates/correction.html, templates/translate.html, static/css); tiếp tục từ trạng thái hiện tại, không xoá hoặc làm lại mù quáng. Dùng skill impeccable, hoàn thiện theo spec (xoá mouseup 6px, resize 8 handle, undo mở rộng, nudge, touch 44x44, post-render nối contract backend), chạy node --check và visual QA desktop+mobile rồi hoàn tất t2.",
       "joinedAt": 1787822263626,
-      "status": "idle"
+      "status": "removed"
     },
     {
       "id": "f2ce2f4e-c166-41b7-a220-086134b81e35",
@@ -80,7 +80,7 @@
       "reasoningEffort": "high",
       "executionPrompt": "Tiếp quản verification bằng DeepSeek-V4-Flash. Đọc spec 342 dòng và kết quả backend/frontend; chạy GitNexus detect_changes, node --check, py_compile, targeted/full pytest và kiểm chứng P0 acceptance, API contract, touch 44x44, Delete guard, không gọi OCR/dịch lại. Không sửa implementation trừ khi được giao repair.",
       "joinedAt": 1787822263704,
-      "status": "idle"
+      "status": "removed"
     },
     {
       "id": "e1fb4f59-802e-4716-8649-ab5a5ee6c0a8",
@@ -91,7 +91,7 @@
       "reasoningEffort": "high",
       "executionPrompt": "Tiếp quản t5/t6 bằng DeepSeek-V4-Flash. Dùng Impeccable critique+audit cho UI gate, screenshot desktop/mobile và touch emulation; sau đó review tích hợp backend/frontend theo spec 342 dòng. Enforce F7 P0, Delete guard, touch hit-area 44x44 và các acceptance P0/P1.",
       "joinedAt": 1787822263769,
-      "status": "idle"
+      "status": "removed"
     }
   ],
   "tasks": [

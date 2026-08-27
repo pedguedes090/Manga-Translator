@@ -409,6 +409,78 @@ def resolve_font_path_for_text(font_path, text):
     return existing[0] if existing else font_path
 
 
+def resolve_font_path_for_style(font_name):
+    """Map a per-block style font NAME (V3 spec F5 / section 4.5) to a font file.
+
+    Mirrors app.get_font_path: the 3 base fonts live as <name>i.ttf, every
+    other font (Yuki-*) as <name>.ttf. Returns None for unsafe names so a
+    persisted style can never escape the fonts/ directory.
+    """
+    if not font_name or not isinstance(font_name, str):
+        return None
+    if "/" in font_name or chr(92) in font_name:
+        return None
+    if font_name in (".", "..") or font_name.startswith("."):
+        return None
+    if font_name in ("animeace_", "arial", "mangat"):
+        return f"fonts/{font_name}i.ttf"
+    return f"fonts/{font_name}.ttf"
+
+
+def _hex_to_rgb(hex_color):
+    """#RRGGBB -> (r, g, b) tuple (PIL expects RGB tuples)."""
+    hex_color = hex_color.lstrip("#")
+    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def erase_mask_region(image, mask, source_lang="ja"):
+    """Erase arbitrary regions defined by an erase mask (white = erase).
+
+    V3 spec F4.6/F7: brush/rect strokes may arrive as a grayscale mask in
+    addition to bbox regions. Inpaints with cv2.inpaint (TELEA, radius 3);
+    falls back to a flat fill with the median color of the mask border ring
+    when inpainting fails. `mask` is a uint8 BGR or grayscale array at image
+    resolution. Returns a NEW image array; the input is never mutated.
+    """
+    if mask is None:
+        return image
+    h, w = image.shape[:2]
+    mh, mw = mask.shape[:2]
+    if mw != w or mh != h:
+        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+    if mask.ndim == 3:
+        gray = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+    else:
+        gray = mask
+    _, binmask = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
+    if not cv2.countNonZero(binmask):
+        return image
+    try:
+        return cv2.inpaint(image, binmask, 3, cv2.INPAINT_TELEA)
+    except Exception as exc:
+        print(f"  [erase_mask] inpaint failed ({exc}); using median border fill")
+
+    result = image.copy()
+    ys, xs = np.where(binmask > 0)
+    if len(xs) == 0:
+        return image
+    x1, x2 = int(xs.min()), int(xs.max()) + 1
+    y1, y2 = int(ys.min()), int(ys.max()) + 1
+    pad = 4
+    ex1, ey1 = max(0, x1 - pad), max(0, y1 - pad)
+    ex2, ey2 = min(w, x2 + pad), min(h, y2 + pad)
+    fill = None
+    if ey2 > ey1 and ex2 > ex1:
+        region = image[ey1:ey2, ex1:ex2]
+        ring = region[binmask[ey1:ey2, ex1:ex2] == 0]
+        if len(ring) >= 3:
+            fill = np.median(ring.reshape(-1, ring.shape[-1]), axis=0)
+    if fill is None:
+        fill = np.median(image.reshape(-1, image.shape[-1]), axis=0)
+    result[binmask > 0] = fill.astype(image.dtype)
+    return result
+
+
 def should_skip_ocr_artifact(text, bbox=None, image_shape=None, source_lang='ja'):
     """Return True for OCR blocks that are likely decoration, credits, or watermarks."""
     if not text or not text.strip():
@@ -1147,9 +1219,95 @@ def erase_text_region(image, bbox, source_lang='ja', prepared=None):
     return image, text_color_rgb, appearance
 
 
-def _compute_font_and_wrap(text, bbox, font_path):
+def _wrap_text_at_size(text, font, usable_w, use_char_wrap):
+    """Wrap text into lines at a fixed font size (pixel-accurate).
+
+    Mirrors the wrapping rules used by the auto-size path: CJK text without
+    spaces wraps per character, Latin/space-separated text wraps per word
+    (long words are broken per character). Returns lines (never empty).
+    """
+    lines = []
+    if use_char_wrap:
+        current_line = ""
+        for ch in text:
+            if ch == '\n':
+                if current_line:
+                    lines.append(current_line)
+                current_line = ""
+                continue
+            test_line = current_line + ch
+            try:
+                test_w = font.getlength(test_line)
+            except Exception:
+                test_w = len(test_line) * font.size * 0.6
+            if test_w > usable_w and current_line:
+                lines.append(current_line)
+                current_line = ch
+            else:
+                current_line = test_line
+        if current_line:
+            lines.append(current_line)
+    else:
+        words = text.split(' ')
+        current_line = ""
+        for word in words:
+            if not word:
+                continue
+            sep = " " if current_line else ""
+            test_line = current_line + sep + word
+            try:
+                test_w = font.getlength(test_line)
+            except Exception:
+                test_w = len(test_line) * font.size * 0.6
+            if test_w > usable_w:
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+                try:
+                    if font.getlength(word) > usable_w:
+                        char_lines = []
+                        chunk = ""
+                        for ch in word:
+                            test_chunk = chunk + ch
+                            if font.getlength(test_chunk) > usable_w and chunk:
+                                char_lines.append(chunk)
+                                chunk = ch
+                            else:
+                                chunk = test_chunk
+                        if chunk:
+                            char_lines.append(chunk)
+                        lines.extend(char_lines[:-1])
+                        if len(char_lines) == 1 and not lines:
+                            lines.append(char_lines[0])
+                            current_line = ""
+                        else:
+                            current_line = char_lines[-1] if char_lines else ""
+                except Exception:
+                    pass
+            else:
+                current_line = test_line
+        if current_line:
+            lines.append(current_line)
+    return lines if lines else [text]
+
+
+def _lines_fit(font, lines, usable_w):
+    """True when every wrapped line fits horizontally at this font size."""
+    for line in lines:
+        try:
+            if font.getlength(line) > usable_w:
+                return False
+        except Exception:
+            if len(line) * font.size * 0.6 > usable_w:
+                return False
+    return True
+
+
+def _compute_font_and_wrap(text, bbox, font_path, style=None):
     """Compute optimal font size and text wrapping for a given bbox.
     Uses pixel-accurate wrapping (measures actual rendered width per word/char).
+    style (V3): optional per-block style dict — font name override and a fixed
+    font_size (0 = auto) with server-side shrink-to-fit (spec F5.4).
     Returns (font, wrapped_text, line_height) or None if nothing fits."""
     if not text or not text.strip():
         return None
@@ -1161,6 +1319,11 @@ def _compute_font_and_wrap(text, bbox, font_path):
     h = y2 - y1
     if w <= 0 or h <= 0:
         return None
+
+    if style and style.get("font"):
+        style_font_path = resolve_font_path_for_style(style.get("font"))
+        if style_font_path:
+            font_path = style_font_path
 
     render_font_path = resolve_font_path_for_text(font_path, text)
 
@@ -1174,6 +1337,43 @@ def _compute_font_and_wrap(text, bbox, font_path):
                   '\uac00' <= ch <= '\ud7af' for ch in text)
     has_spaces = ' ' in text
     use_char_wrap = has_cjk and not has_spaces  # CJK: wrap per character
+
+    # V3 fixed size (style.font_size > 0, clamp 8-120) with server-side
+    # shrink-to-fit (spec F5.4): requested size when it fits, otherwise the
+    # largest size >= MIN_FONT_SIZE that fits; tiny requests render as-is.
+    fixed_size = 0
+    if style:
+        try:
+            fixed_size = int(style.get("font_size") or 0)
+        except (TypeError, ValueError):
+            fixed_size = 0
+        fixed_size = max(0, min(120, fixed_size))
+    if fixed_size:
+        if fixed_size <= MIN_FONT_SIZE:
+            font = get_cached_font(render_font_path, fixed_size)
+            lines = _wrap_text_at_size(text, font, usable_w, use_char_wrap)
+            line_height = int(fixed_size * LINE_SPACING)
+            return font, lines, line_height
+        lo, hi = MIN_FONT_SIZE, fixed_size
+        best_font_size = 0
+        best_wrapped_lines = None
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            font = get_cached_font(render_font_path, mid)
+            line_height = int(mid * LINE_SPACING)
+            lines = _wrap_text_at_size(text, font, usable_w, use_char_wrap)
+            total_height = len(lines) * line_height
+            if total_height <= usable_h and _lines_fit(font, lines, usable_w):
+                best_font_size = mid
+                best_wrapped_lines = lines
+                lo = mid + 1  # try larger
+            else:
+                hi = mid - 1
+        if best_font_size:
+            font = get_cached_font(render_font_path, best_font_size)
+            line_height = int(best_font_size * LINE_SPACING)
+            return font, best_wrapped_lines, line_height
+        # Nothing >= MIN_FONT_SIZE fits; fall through to the auto search.
 
     bubble_area = usable_w * usable_h
     char_count = max(len(text), 1)
@@ -1191,76 +1391,7 @@ def _compute_font_and_wrap(text, bbox, font_path):
         line_height = int(mid * LINE_SPACING)
 
         # --- Pixel-based wrapping ---
-        lines = []
-        if use_char_wrap:
-            # CJK: wrap character by character
-            current_line = ""
-            for ch in text:
-                if ch == '\n':
-                    if current_line:
-                        lines.append(current_line)
-                    current_line = ""
-                    continue
-                test_line = current_line + ch
-                try:
-                    test_w = font.getlength(test_line)
-                except Exception:
-                    test_w = len(test_line) * mid * 0.6
-                if test_w > usable_w and current_line:
-                    lines.append(current_line)
-                    current_line = ch
-                else:
-                    current_line = test_line
-            if current_line:
-                lines.append(current_line)
-        else:
-            # Latin / space-separated: wrap by words
-            words = text.split(' ')
-            current_line = ""
-            for word in words:
-                if not word:
-                    continue
-                sep = " " if current_line else ""
-                test_line = current_line + sep + word
-                try:
-                    test_w = font.getlength(test_line)
-                except Exception:
-                    test_w = len(test_line) * mid * 0.6
-                if test_w > usable_w:
-                    if current_line:
-                        lines.append(current_line)
-                    current_line = word
-                    # If single word is wider than usable_w, force character-level break
-                    try:
-                        if font.getlength(word) > usable_w:
-                            # Break word into chunks
-                            char_lines = []
-                            chunk = ""
-                            for ch in word:
-                                test_chunk = chunk + ch
-                                if font.getlength(test_chunk) > usable_w and chunk:
-                                    char_lines.append(chunk)
-                                    chunk = ch
-                                else:
-                                    chunk = test_chunk
-                            if chunk:
-                                char_lines.append(chunk)
-                            # Replace current_line with first chunk, append rest
-                            lines.extend(char_lines[:-1])
-                            if len(char_lines) == 1 and not lines:
-                                lines.append(char_lines[0])
-                                current_line = ""
-                            else:
-                                current_line = char_lines[-1] if char_lines else ""
-                    except Exception:
-                        pass
-                else:
-                    current_line = test_line
-            if current_line:
-                lines.append(current_line)
-
-        if not lines:
-            lines = [text]
+        lines = _wrap_text_at_size(text, font, usable_w, use_char_wrap)
 
         # Check if all lines fit horizontally
         all_fit = True
@@ -1289,48 +1420,7 @@ def _compute_font_and_wrap(text, bbox, font_path):
         font = get_cached_font(render_font_path, best_font_size)
 
         # Wrap at minimum size
-        if use_char_wrap:
-            best_wrapped_lines = []
-            current_line = ""
-            for ch in text:
-                if ch == '\n':
-                    if current_line:
-                        best_wrapped_lines.append(current_line)
-                    current_line = ""
-                    continue
-                test_line = current_line + ch
-                try:
-                    test_w = font.getlength(test_line)
-                except Exception:
-                    test_w = len(test_line) * best_font_size * 0.6
-                if test_w > usable_w and current_line:
-                    best_wrapped_lines.append(current_line)
-                    current_line = ch
-                else:
-                    current_line = test_line
-            if current_line:
-                best_wrapped_lines.append(current_line)
-        else:
-            words = text.split(' ')
-            best_wrapped_lines = []
-            current_line = ""
-            for word in words:
-                if not word:
-                    continue
-                sep = " " if current_line else ""
-                test_line = current_line + sep + word
-                try:
-                    test_w = font.getlength(test_line)
-                except Exception:
-                    test_w = len(test_line) * best_font_size * 0.6
-                if test_w > usable_w:
-                    if current_line:
-                        best_wrapped_lines.append(current_line)
-                    current_line = word
-                else:
-                    current_line = test_line
-            if current_line:
-                best_wrapped_lines.append(current_line)
+        best_wrapped_lines = _wrap_text_at_size(text, font, usable_w, use_char_wrap)
 
         if not best_wrapped_lines:
             best_wrapped_lines = [text]
@@ -1341,10 +1431,14 @@ def _compute_font_and_wrap(text, bbox, font_path):
 
 
 def _draw_text_on_pil(pil_image, text, bbox, font, lines, line_height,
-                       text_color=(0, 0, 0), appearance=None):
+                       text_color=(0, 0, 0), appearance=None, style=None):
     """Draw wrapped text onto a PIL image at the given bbox.
     Renders outline + main text as whole lines (no per-char spacing
     that could cause ghost doubling from overlapping outlines).
+
+    style (V3): optional per-block style dict with text_color (#RRGGBB or
+    None = auto appearance), align (left/center/right), bold (synthetic
+    stroke) and italic (affine shear) — spec F5.5-F5.7.
     """
     x1, y1, x2, y2 = [int(v) for v in bbox]
     bw = x2 - x1
@@ -1360,23 +1454,76 @@ def _draw_text_on_pil(pil_image, text, bbox, font, lines, line_height,
     font_size = font.size
     outline_width = max(MIN_OUTLINE_WIDTH, int(round(font_size * outline_ratio)))
 
+    # V3 per-block style overrides (spec F5.5-F5.8).
+    align = "center"
+    bold = False
+    italic = False
+    if style:
+        style_color = style.get("text_color")
+        if isinstance(style_color, str):
+            try:
+                text_color = _hex_to_rgb(style_color)
+            except (TypeError, ValueError):
+                pass
+        align = style.get("align", "center")
+        if align not in ("left", "center", "right"):
+            align = "center"
+        bold = bool(style.get("bold", False))
+        italic = bool(style.get("italic", False))
+
+    padding = int(bw * PADDING_RATIO) if bw > 0 else 0
+    stroke_width = 2 if bold else 0
+    shear = 0.18 if italic else 0.0
+
     for line in lines:
         try:
             line_px_w = font.getlength(line)
         except Exception:
             line_px_w = len(line) * font_size * 0.6
 
-        text_x = x1 + (bw - line_px_w) // 2
+        if align == "left":
+            text_x = x1 + padding
+        elif align == "right":
+            text_x = x2 - padding - line_px_w
+        else:
+            text_x = x1 + (bw - line_px_w) // 2
+        text_x = int(text_x)
 
-        if need_outline and outline_width >= 1:
-            for dx in (-outline_width, 0, outline_width):
-                for dy in (-outline_width, 0, outline_width):
-                    if dx == 0 and dy == 0:
-                        continue
-                    draw.text((text_x + dx, text_y + dy), line,
-                              font=font, fill=outline_color)
+        if italic:
+            # Render the line into an RGBA strip, affine-shear it, paste back
+            # (spec F5.7: data=(1, 0.18, 0, 0, 1, 0)).
+            shear_extra = int(round(line_height * shear)) + 1
+            strip_w = max(1, int(line_px_w) + shear_extra)
+            strip_h = line_height + 2
+            strip = Image.new("RGBA", (strip_w, strip_h), (0, 0, 0, 0))
+            strip_draw = ImageDraw.Draw(strip)
+            if need_outline and outline_width >= 1:
+                for dx in (-outline_width, 0, outline_width):
+                    for dy in (-outline_width, 0, outline_width):
+                        if dx == 0 and dy == 0:
+                            continue
+                        strip_draw.text((1 + dx, 1 + dy), line,
+                                        font=font, fill=outline_color)
+            strip_draw.text((1, 1), line, font=font, fill=text_color,
+                            stroke_width=stroke_width, stroke_fill=text_color)
+            sheared = strip.transform(
+                (strip_w, strip_h),
+                Image.AFFINE,
+                (1, shear, 0, 0, 1, 0),
+                resample=Image.BICUBIC,
+            )
+            pil_image.paste(sheared, (text_x, text_y), sheared)
+        else:
+            if need_outline and outline_width >= 1:
+                for dx in (-outline_width, 0, outline_width):
+                    for dy in (-outline_width, 0, outline_width):
+                        if dx == 0 and dy == 0:
+                            continue
+                        draw.text((text_x + dx, text_y + dy), line,
+                                  font=font, fill=outline_color)
 
-        draw.text((text_x, text_y), line, font=font, fill=text_color)
+            draw.text((text_x, text_y), line, font=font, fill=text_color,
+                      stroke_width=stroke_width, stroke_fill=text_color)
         text_y += line_height
 
 
@@ -1439,10 +1586,13 @@ def render_all_blocks(image, blocks, font_path):
             continue
         text_color = block.get('text_color', (0, 0, 0))
         appearance = block.get('appearance', None)
-        result = _compute_font_and_wrap(text, bbox, font_path)
+        # V3: optional per-block style {font, font_size, text_color, bold,
+        # italic, align} — render_all_blocks reads block["style"] (spec 4.6).
+        style = block.get('style') or None
+        result = _compute_font_and_wrap(text, bbox, font_path, style=style)
         if result is not None:
             font, lines, line_height = result
-            render_blocks.append((bbox, font, lines, line_height, text_color, appearance))
+            render_blocks.append((bbox, font, lines, line_height, text_color, appearance, style))
 
     if not render_blocks:
         return image
@@ -1451,9 +1601,9 @@ def render_all_blocks(image, blocks, font_path):
     pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
 
     # Draw all blocks
-    for bbox, font, lines, line_height, text_color, appearance in render_blocks:
+    for bbox, font, lines, line_height, text_color, appearance, style in render_blocks:
         _draw_text_on_pil(pil_image, '', bbox, font, lines, line_height,
-                          text_color, appearance=appearance)
+                          text_color, appearance=appearance, style=style)
 
     # Single RGB→BGR conversion back
     image[:, :, :] = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
