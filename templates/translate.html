@@ -3,6 +3,7 @@
 
 <head>
    <meta charset="UTF-8">
+   <meta name="viewport" content="width=device-width, initial-scale=1.0">
    <title>Manga Translator - Results</title>
    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
    <link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,100..900;1,100..900&display=swap"
@@ -18,6 +19,9 @@
 
    <div class="results-container">
       <h2 class="results-title">✨ Kết quả dịch ({{ images|length }} ảnh)</h2>
+      {% if correction_session_id %}
+      <p class="edit-note">Ảnh đã chỉnh sửa sau render sẽ tự cập nhật tại đây.</p>
+      {% endif %}
       {% if warning %}
       <div class="result-warning">{{ warning }}</div>
       {% endif %}
@@ -39,6 +43,11 @@
                alt="{{ img.name }}">
             <div class="image-info">
                <span class="image-name">{{ img.name }}</span>
+               {% if correction_session_id %}
+               <a href="/postrender/{{ correction_session_id }}?img={{ loop.index0 }}" class="edit-btn">
+                  ✏️ Chỉnh sửa
+               </a>
+               {% endif %}
                <a href="#" class="download-btn" data-image="{{ img.data }}" data-name="{{ img.name }}">
                   💾 Download
                </a>

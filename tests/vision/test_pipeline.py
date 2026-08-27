@@ -3,12 +3,19 @@ from unittest.mock import Mock
 
 import cv2
 import numpy as np
+import pytest
 
 from add_text import assess_erasability, erase_text_region
 from vision.config import VisionConfig
 from vision.maskers.hybrid import HybridTextMasker
-from vision.pipeline import VisionPipeline, _choose_erase_method, score_erasability
+from vision.pipeline import (
+    VisionPipeline,
+    _choose_erase_method,
+    _match_bubble,
+    score_erasability,
+)
 from vision.types import (
+    BubbleInstance,
     ErasabilityDecision,
     MaskResult,
     PreparedBlock,
@@ -161,27 +168,53 @@ def test_erase_page_unions_complex_masks_for_one_inference():
     ]
 
 
-def test_erase_page_unions_ordinary_masks_for_one_telea_call(monkeypatch):
-    masks = []
+def test_lama_compatibility_fallback_uses_bounded_telea_crops(monkeypatch):
+    calls = []
 
     def recording_inpaint(image, mask, radius, method):
-        masks.append(mask.copy())
+        calls.append(image.shape)
+        return image.copy()
+
+    monkeypatch.setattr(cv2, "inpaint", recording_inpaint)
+    pipeline = VisionPipeline(masker=HybridTextMasker(), lama_inpainter=None)
+    image = np.zeros((100, 160, 3), dtype=np.uint8)
+
+    pipeline.erase_page(
+        image,
+        [
+            _lama_block("first", (4, 5, 12, 13)),
+            _lama_block("second", (140, 80, 150, 90)),
+        ],
+    )
+
+    assert len(calls) == 2
+    assert all(shape[0] < image.shape[0] for shape in calls)
+    assert all(shape[1] < image.shape[1] for shape in calls)
+
+
+def test_erase_page_uses_bounded_crops_for_distant_telea_masks(monkeypatch):
+    calls = []
+
+    def recording_inpaint(image, mask, radius, method):
+        calls.append((image.shape, mask.copy()))
         return np.full_like(image, 255)
 
     monkeypatch.setattr(cv2, "inpaint", recording_inpaint)
     pipeline = VisionPipeline(masker=HybridTextMasker(), lama_inpainter=None)
-    image = np.zeros((20, 30, 3), np.uint8)
-    first = replace(_lama_block("first", (2, 3, 8, 9)), erase_method="telea")
+    image = np.zeros((100, 160, 3), np.uint8)
+    first = replace(_lama_block("first", (4, 5, 12, 13)), erase_method="telea")
     second = replace(
-        _lama_block("second", (20, 10, 27, 17)), erase_method="telea"
+        _lama_block("second", (140, 80, 150, 90)), erase_method="telea"
     )
 
     output, results = pipeline.erase_page(image, [first, second])
 
-    assert len(masks) == 1
-    assert np.all(masks[0][3:9, 2:8] == 255)
-    assert np.all(masks[0][10:17, 20:27] == 255)
-    assert np.all(output[masks[0] > 0] == 255)
+    assert len(calls) == 2
+    assert all(shape[0] < image.shape[0] for shape, _ in calls)
+    assert all(shape[1] < image.shape[1] for shape, _ in calls)
+    assert np.all(output[5:13, 4:12] == 255)
+    assert np.all(output[80:90, 140:150] == 255)
+    assert np.all(output[50, 80] == 0)
     assert [result.method for result in results] == ["telea", "telea"]
 
 
@@ -226,6 +259,7 @@ def test_erase_page_continues_with_telea_when_lama_runtime_fails():
     assert output.shape == image.shape
     assert "checkpoint is unavailable" in results[0].warning
     assert "Telea" in results[0].warning
+    assert results[0].method == "telea"
 
 
 def test_pipeline_auto_builds_lama_runtime_from_cuda_config(monkeypatch):
@@ -328,3 +362,65 @@ def test_prepare_page_runs_bubble_segmentation_once_for_all_blocks():
 
     assert len(prepared) == 2
     segmenter.segment.assert_called_once_with(image)
+
+
+
+def test_match_bubble_rejects_low_confidence_overlap():
+    mask = np.ones((20, 20), dtype=np.uint8)
+    bubble = BubbleInstance(
+        "low", (0, 0, 20, 20), mask, 0.20, "speech_bubble"
+    )
+
+    assert _match_bubble(
+        (5, 5, 15, 15), [bubble], min_confidence=0.45
+    ) is None
+
+
+def test_erase_page_uses_configured_telea_radius_for_lama_compatibility(
+    monkeypatch,
+):
+    radii = []
+
+    def recording_inpaint(image, mask, radius, method):
+        radii.append(radius)
+        return image.copy()
+
+    monkeypatch.setattr(cv2, "inpaint", recording_inpaint)
+    base = VisionConfig.load("configs/vision.json")
+    config = replace(
+        base,
+        inpaint=replace(base.inpaint, telea_radius=7),
+    )
+    pipeline = VisionPipeline(
+        masker=HybridTextMasker(),
+        lama_inpainter=None,
+        config=config,
+    )
+
+    pipeline.erase_page(
+        np.zeros((20, 30, 3), dtype=np.uint8),
+        [_lama_block("complex", (2, 3, 8, 9))],
+    )
+
+    assert radii == [7]
+
+
+
+def test_erase_page_does_not_fallback_when_cpu_fallback_is_disabled():
+    class FailingInpainter:
+        def inpaint(self, image, mask):
+            raise RuntimeError("model failed")
+
+    base = VisionConfig.load("configs/vision.json")
+    config = replace(base, allow_cpu_fallback=False)
+    pipeline = VisionPipeline(
+        masker=HybridTextMasker(),
+        lama_inpainter=FailingInpainter(),
+        config=config,
+    )
+
+    with pytest.raises(RuntimeError, match="model failed"):
+        pipeline.erase_page(
+            np.zeros((20, 30, 3), dtype=np.uint8),
+            [_lama_block("complex", (2, 3, 8, 9))],
+        )

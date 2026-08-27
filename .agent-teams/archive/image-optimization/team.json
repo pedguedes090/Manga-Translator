@@ -1,0 +1,152 @@
+{
+  "name": "image-optimization",
+  "id": "image-optimization",
+  "description": "Nghiên cứu, benchmark và triển khai tối ưu tốc độ pipeline xử lý ảnh và chất lượng xoá text cho Manga-Translator.",
+  "captainSessionId": "session-ebc43d9e-92f6-40e8-8a0d-348681275aa6",
+  "createdAt": 1787799012893,
+  "members": [
+    {
+      "id": "1098533c-a84d-45e1-966d-4762635022f7",
+      "name": "baseline-evaluator",
+      "role": "baseline và thực nghiệm",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "max",
+      "joinedAt": 1787799034360,
+      "status": "removed"
+    },
+    {
+      "id": "f1468a1c-5607-43c4-bc1a-89f88838bf9a",
+      "name": "vision-algorithm",
+      "role": "nghiên cứu thuật toán xoá text",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "max",
+      "joinedAt": 1787799034409,
+      "status": "removed"
+    },
+    {
+      "id": "da0214e7-a269-4db5-abaf-507e2ddb0594",
+      "name": "performance-profiler",
+      "role": "phân tích bottleneck hiệu năng",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "max",
+      "joinedAt": 1787799034450,
+      "status": "removed"
+    },
+    {
+      "id": "43224833-d47f-4670-830c-8f0a65a58787",
+      "name": "pipeline-architect",
+      "role": "kiến trúc tích hợp pipeline",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "max",
+      "joinedAt": 1787799034533,
+      "status": "removed"
+    },
+    {
+      "id": "13d5a46f-ce41-49aa-95ef-d7c5201a1e80",
+      "name": "skeptical-reviewer",
+      "role": "reviewer và thiết kế tiêu chí chứng minh",
+      "provider": "openai-codex",
+      "model": "gpt-5.6-luna",
+      "reasoningEffort": "max",
+      "joinedAt": 1787799034578,
+      "status": "removed"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1",
+      "subject": "Đo baseline pipeline hiện tại",
+      "description": "Phân tích read-only repo Manga-Translator bằng GitNexus và source. Xác định cách chạy benchmark hiện có, dataset/fixtures, các stage chính của upload/OCR/mask/inpaint/translate/render. Nếu benchmark hiện có an toàn thì chạy baseline trên mẫu đại diện và ghi nhận số đo; nếu không, chỉ ra chính xác thiếu gì. Báo cáo latency theo stage, chất lượng xoá text nếu đo được, môi trường và lệnh tái lập. Không sửa hoặc tạo file.",
+      "status": "completed",
+      "assignee": "baseline-evaluator",
+      "dependencies": [],
+      "attempt": 1,
+      "createdAt": 1787799059166,
+      "updatedAt": 1787800081047,
+      "attemptId": "2971a949-6917-46f4-8cca-4b3b1c9d0f38",
+      "reassigning": false,
+      "output": "Read-only baseline complete; no files modified/created. GitNexus/source map: upload_file -> ChromeLensOCR.process_batch -> filter_ocr_blocks -> _do_full_pipeline -> translate_and_render -> sequential legacy erase_text_region/render_all_blocks; VisionPipeline benchmark path is separate prepare_page/erase_page. Existing evaluators are tools/evaluate_masks.py (mask quality; neural fails because vision/maskers/neural.py absent) and tools/stress_test_comic_pages.py (real detector proposals; CLI output required). Fresh in-memory vision-eval-v1 (1,000 synthetic; manifest SHA256 2825b96a...) yielded heuristic P/R/Dice/IoU .584978/.710968/.637995/.576347 and hybrid .639958/.819717/.711734/.619650; hybrid +11.558% Dice overall. Fresh representative comix-v0 [0,1,2,3,4,50,100,200,300,499] (10 pages/122 blocks, CPU, no LaMa): heuristic prepare p50/p95 109.393/227.643ms, erase 434.267/1494.381ms, combined 516.616/1635.501ms; hybrid 115.350/204.344, 427.158/1998.728, 493.829/2118.958ms. Legacy surrogate with injected text: decode 20.551/40.260ms, erase 670.056/1223.354ms, render 53.567/86.145ms; OCR/translation not measured (remote LensAPI/providers, no deterministic fixture). No official inpaint/erase quality benchmark; real comix lacks clean targets. Environment Windows 10.0.26200, Python 3.11.6, NumPy 1.24.2, OpenCV 4.9.0, Pillow 10.3.0, Flask 2.2.5, chrome_lens_py present, torch missing, CUDA 0; LaMa checkpoint exists but unavailable, Telea fallback used. Datasets and hashes, exact commands, missing tools/docs, stale existing report caveat sent to captain via report/message."
+    },
+    {
+      "id": "t2",
+      "subject": "Phân tích các phương pháp xoá text",
+      "description": "Read-only: dùng GitNexus query/context và đọc source để phân tích add_text.py, vision/maskers/heuristic.py, vision/maskers/hybrid.py, vision/inpainting/lama.py, process_bubble.py/detect_bubbles.py và luồng gọi. So sánh heuristic, hybrid, inpainting và khả năng fallback; tìm lỗi chất lượng điển hình (viền chữ, screentone, nền phức tạp, bbox sai). Đề xuất tối đa 2-3 ứng viên có lý do và rủi ro. Với mỗi điểm có thể sửa, chạy impact upstream trước khi đề xuất. Không sửa file.",
+      "status": "completed",
+      "assignee": "vision-algorithm",
+      "dependencies": [],
+      "attempt": 1,
+      "createdAt": 1787799059248,
+      "updatedAt": 1787799903782,
+      "attemptId": "b2ccc2bb-5024-4181-acd5-0d9892cfcf3e",
+      "reassigning": false,
+      "output": "Đã phân tích source + GitNexus call graph (read-only), chạy 31 vision tests pass và smoke Hybrid. Xác nhận app production hiện dùng add_text legacy Heuristic/Telea (không import VisionPipeline), còn Hybrid/LaMa chỉ ở vision pipeline/stress; mô tả ưu/nhược/fallback, các lỗi screentone/viền/bbox/bubble/chunk và 3 hướng đề xuất. Impact upstream đã chạy: remove_screentone_dots CRITICAL; _analyze_region CRITICAL; render_single_image HIGH; các điểm _local_background_residual, _match_bubble, _choose_erase_method, erase_page, detector helpers LOW. Báo cáo đầy đủ đã gửi captain."
+    },
+    {
+      "id": "t3",
+      "subject": "Tìm bottleneck hiệu năng",
+      "description": "Read-only performance audit. Dùng GitNexus query/context/trace và đọc source/tests để lập bản đồ chi phí: model initialization, OCR calls/retry, image copies/conversions, mask morphology, LaMa inference, font/render loops, API key batching, cache và concurrency. Xác định bottleneck có khả năng cao nhất, cách profile/đo chứng minh, và tối ưu nào ít rủi ro nhất. Không sửa file.",
+      "status": "completed",
+      "assignee": "captain",
+      "dependencies": [],
+      "attempt": 2,
+      "createdAt": 1787799059361,
+      "updatedAt": 1787800136427,
+      "reassigning": false,
+      "attemptId": "08e011bc-cb02-4b89-92cb-27c9df079843",
+      "output": "Performance audit complete from profiler report and fresh measurements. Production uses legacy per-block erase; assess+erase duplicates work (~20-25%). Hybrid generation on 1200x1800/20 blocks was ~1.245s and prepare_page ~1.42s; actual LaMa fp32 was ~2.0s at 1200x1800 and ~4.69s at 1600x2400, with ~0.8s first-load cost and fp16 not beneficial due fallback. Existing erase_page already batches LaMa masks into one inference; active app does not use it. No files changed; baseline run used CPU/Telea because torch/CUDA unavailable."
+    },
+    {
+      "id": "t4",
+      "subject": "Thiết kế phương án tích hợp an toàn",
+      "description": "Phân tích kiến trúc read-only bằng GitNexus. Xác định entry points, callers, process flows và compatibility constraints khi thay đổi xoá text hoặc orchestration. Đề xuất design tối thiểu có thể bật/tắt, giữ fallback CPU/GPU, không phá API/UI/session. Với symbol dự kiến thay đổi, chạy impact upstream và ghi risk. Không sửa file.",
+      "status": "completed",
+      "assignee": "pipeline-architect",
+      "dependencies": [],
+      "attempt": 1,
+      "createdAt": 1787799059459,
+      "updatedAt": 1787799977102,
+      "attemptId": "f1bd1225-60cf-4876-8ea3-92053d9535e4",
+      "reassigning": false,
+      "output": "Completed read-only GitNexus architecture and upstream impact analysis. Mapped Flask/SocketIO routes, OCR->translation->erase->render flows, manual correction/session and CLI/stress consumers. HIGH risks: app.render_single_image (4 impacted), app.load_session (3 direct callers), vision.pipeline.erase_prepared_block (8 impacted); other seams LOW as reported. Recommended additive default-OFF lazy VisionPipeline adapter: prepare_page once/page, ephemeral masks, page-level erase_page for LaMa union, recompute after correction edits, preserve legacy wrappers/API/UI/SocketIO/session contracts, and honor allow_cpu_fallback via runtime factory. No files changed."
+    },
+    {
+      "id": "t5",
+      "subject": "Thiết kế benchmark và tiêu chí chứng minh",
+      "description": "Độc lập phản biện read-only: thiết kế benchmark tái lập cho tốc độ và chất lượng xoá text. Đề xuất dataset/gold masks hoặc proxy metrics phù hợp, cách đo residual text/edge preservation/background fidelity, latency, peak memory, warm/cold model cost, CPU/GPU. Đặt acceptance thresholds và cách tránh kết luận sai do dataset nhỏ. Không sửa file.",
+      "status": "completed",
+      "assignee": "skeptical-reviewer",
+      "dependencies": [],
+      "attempt": 1,
+      "createdAt": 1787799059555,
+      "updatedAt": 1787799416550,
+      "attemptId": "dcc9a84b-9ab7-43ee-8a7c-385d3f454493",
+      "reassigning": false,
+      "output": "Read-only skeptical benchmark design delivered to captain. Proposed three evidence tiers (exact synthetic, human-gold real, COMIX operational), mask/residual/edge/background metrics, warm/cold CPU/GPU latency and memory protocol, hard quality/safety/performance gates, and title-cluster bootstrap/minimum sample-size rules. Audited current tooling: synthetic is deterministic but fixed/simple; COMIX is detector-proposal only; evaluator means rows without CI; stress runner omits decode, conflates prepare+erase, erases prefix only, and lacks memory/gold-quality metrics. No files changed."
+    },
+    {
+      "id": "t6",
+      "subject": "Tổng hợp evidence thành implementation plan",
+      "description": "Sau khi 5 nhiệm vụ nghiên cứu hoàn tất, tổng hợp kết quả thành một kế hoạch triển khai có thứ tự: baseline → test/evaluation trước → tối ưu thuật toán → tối ưu hiệu năng → regression/verification. Chọn phương án dựa trên bằng chứng, nêu rõ file/symbol cần sửa, impact/risk, benchmark command và tiêu chí pass/fail. Không viết code; đây là deliverable để captain trình người dùng duyệt.",
+      "status": "completed",
+      "dependencies": [
+        "t1",
+        "t2",
+        "t3",
+        "t4",
+        "t5"
+      ],
+      "attempt": 2,
+      "createdAt": 1787799059759,
+      "updatedAt": 1787800233085,
+      "assignee": "captain",
+      "reassigning": false,
+      "attemptId": "cfe88508-21fe-4999-b00b-aea623ffeb23",
+      "output": "Evidence-backed synthesis complete. Recommend a phased, additive design: preserve legacy Heuristic+flat/Telea by default; add an opt-in lazy PreparedPage/VisionPipeline adapter that prepares each page once and batches page erasure, recomputes masks after manual edits, honors CPU/fallback behavior, and preserves all route/session/SocketIO/result contracts. Add benchmark instrumentation and TDD regression gates before enabling any default. Current proof: 1,000 synthetic masks heuristic Dice .6380 vs hybrid .7117 (+11.56% relative, below the 15% gate), representative COMIX CPU combined p50/p95 516.6/1635.5ms heuristic vs 493.8/2119.0ms hybrid, legacy surrogate erase p50/p95 670.1/1223.4ms, and no real clean-target erase-quality evidence; therefore no backend may be called production-optimal yet. LaMa remains canary-only until GPU/checkpoint and quality evidence exist. No files changed."
+    }
+  ],
+  "taskSeq": 6
+}

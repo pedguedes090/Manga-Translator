@@ -396,6 +396,32 @@ button:active {
 	background: #3da85c;
 }
 
+.edit-btn {
+	background: #5E1675;
+	color: white;
+	padding: 10px 15px;
+	min-height: 44px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 6px;
+	text-decoration: none;
+	font-size: 14px;
+	transition: background 0.2s;
+}
+
+.edit-btn:hover {
+	background: #4a1160;
+}
+
+.edit-note {
+	text-align: center;
+	color: #6b7280;
+	font-size: 13px;
+	margin-top: -18px;
+	margin-bottom: 22px;
+}
+
 .buttons_image {
 	display: flex;
 	justify-content: center;

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Touch Size QA</title>
+<link rel="stylesheet" href="/static/css/correction.css">
+</head>
+<body>
+<div class="corr-topbar"><span>t</span></div>
+<div class="corr-toolbar">
+  <div class="tool-group">
+    <button class="tool-btn" id="tool-select">🖱️ Chọn</button>
+    <button class="tool-btn" id="tool-add">＋ Thêm</button>
+    <button class="tool-btn" id="tool-delete">🗑️ Xoá</button>
+  </div>
+</div>
+<div class="corr-body" id="corr-body" style="min-height:400px">
+  <div class="corr-sidebar">
+    <div id="image-thumbnails">
+      <div class="thumb-item active" data-index="0" role="button" tabindex="0"><canvas class="thumb-canvas"></canvas><span class="thumb-badge">chưa lưu</span></div>
+    </div>
+  </div>
+  <div class="corr-canvas-wrap">
+    <button id="btn-toggle-editor" class="editor-toggle" aria-expanded="false">📐 Thuộc tính</button>
+    <div class="canvas-outer"><canvas id="main-canvas"></canvas></div>
+  </div>
+  <div class="corr-editor" id="block-editor">
+    <div class="editor-head"><h3>Thuộc tính</h3><button id="btn-close-editor" class="editor-close">✕</button></div>
+    <div class="prop-nudge">
+      <button class="nudge-btn" data-dx="0" data-dy="-1">▲</button>
+      <button class="nudge-btn" data-dx="-1" data-dy="0">◀</button>
+      <button class="nudge-btn" data-dx="1" data-dy="0">▶</button>
+      <button class="nudge-btn" data-dx="0" data-dy="1">▼</button>
+    </div>
+    <div id="toast" class="toast show"><span>Đã xoá</span><button class="toast-action">Hoàn tác</button></div>
+  </div>
+</div>
+<script>
+(function () {
+  function dim(sel) {
+    var el = document.querySelector(sel);
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    return { w: Math.round(r.width), h: Math.round(r.height) };
+  }
+  window.addEventListener('load', function () {
+    setTimeout(function () {
+      var out = {
+        docW: document.documentElement.scrollWidth,
+        innerW: window.innerWidth,
+        editorClose: dim('#btn-close-editor'),
+        editorToggle: dim('#btn-toggle-editor'),
+        nudgeBtn: dim('.nudge-btn'),
+        toastAction: dim('.toast-action'),
+        thumbRole: document.querySelector('.thumb-item').getAttribute('role'),
+        thumbTab: document.querySelector('.thumb-item').getAttribute('tabindex')
+      };
+      var pre = document.createElement('pre');
+      pre.id = 'touch-results';
+      pre.textContent = JSON.stringify(out, null, 1);
+      document.body.appendChild(pre);
+    }, 400);
+  });
+})();
+</script>
+</body>
+</html>

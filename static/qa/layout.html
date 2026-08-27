@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Layout QA</title>
+<link rel="stylesheet" href="/static/css/correction.css">
+</head>
+<body>
+<div class="corr-topbar">
+  <a href="/" class="corr-logo">← Quay lại</a>
+  <span class="corr-title">✏️ Chỉnh sửa bóng thoại</span>
+  <span class="corr-stats"><span id="total-blocks">3</span> bóng thoại · 2 ảnh</span>
+</div>
+<div class="corr-toolbar">
+  <div class="tool-group" role="group" aria-label="Công cụ">
+    <button class="tool-btn active" id="tool-select">🖱️ Chọn</button>
+    <button class="tool-btn" id="tool-add">＋ Thêm</button>
+    <button class="tool-btn" id="tool-delete">🗑️ Xoá</button>
+  </div>
+  <div class="zoom-group"><button class="zoom-btn">−</button><span class="zoom-label">Fit</span></div>
+  <span class="shortcuts" id="shortcuts-hint"><kbd>S</kbd> Chọn</span>
+</div>
+<div class="corr-hints" id="corr-hints" role="status" aria-live="polite"></div>
+<div class="corr-body" id="corr-body">
+  <div class="corr-sidebar">
+    <div id="image-thumbnails">
+      <div class="thumb-item active" data-index="0"><canvas class="thumb-canvas"></canvas><span class="thumb-name">p1</span><span class="thumb-count">3 blocks</span><span class="thumb-badge">chưa lưu</span></div>
+      <div class="thumb-item" data-index="1"><canvas class="thumb-canvas"></canvas><span class="thumb-name">p2</span><span class="thumb-count">1 blocks</span><span class="thumb-badge">chưa lưu</span></div>
+    </div>
+  </div>
+  <div class="corr-canvas-wrap">
+    <button id="btn-toggle-editor" class="editor-toggle" aria-expanded="false" aria-controls="block-editor">📐 Thuộc tính</button>
+    <div class="canvas-outer"><canvas id="main-canvas" role="img"></canvas></div>
+    <div class="canvas-nav"><button id="btn-prev" class="nav-btn">←</button><span id="current-image-label"></span><button id="btn-next" class="nav-btn">→</button></div>
+  </div>
+  <div class="corr-editor" id="block-editor">
+    <div class="editor-head"><h3>Thuộc tính</h3><button id="btn-close-editor" class="editor-close">✕</button></div>
+    <div id="block-properties"><p class="no-sel">Chọn bóng thoại</p></div>
+    <div class="ocr-status" id="ocr-status"></div>
+  </div>
+</div>
+<div class="corr-footer"><a href="/" class="btn-outline">Huỷ</a><button class="btn-primary">✅ Tiếp tục</button></div>
+<div id="toast" class="toast" role="status"></div>
+<script>
+(function () {
+  function rect(el) {
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) };
+  }
+  function run() {
+    var out = {
+      innerW: window.innerWidth,
+      scrollW: document.documentElement.scrollWidth,
+      overflowX: document.documentElement.scrollWidth > window.innerWidth + 1,
+      sidebar: rect(document.querySelector('.corr-sidebar')),
+      editor: rect(document.getElementById('block-editor')),
+      canvasWrap: rect(document.querySelector('.corr-canvas-wrap')),
+      toggleDisplay: getComputedStyle(document.getElementById('btn-toggle-editor')).display,
+      editorTransform: getComputedStyle(document.getElementById('block-editor')).transform,
+      bodyFlexDir: getComputedStyle(document.getElementById('corr-body')).flexDirection
+    };
+    var pre = document.createElement('pre');
+    pre.id = 'layout-results';
+    pre.textContent = JSON.stringify(out, null, 1);
+    document.body.appendChild(pre);
+  }
+  window.addEventListener('load', function () { setTimeout(run, 300); });
+})();
+</script>
+</body>
+</html>

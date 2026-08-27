@@ -1054,6 +1054,25 @@ def assess_erasability(image, bbox, text=None, source_lang='ja', prepared=None):
     }
 
 
+def appearance_for_prepared(prepared):
+    """Build renderer appearance metadata without changing image pixels."""
+    appearance = _decide_text_appearance(asdict(prepared.region))
+    method_names = {
+        'preserve': 'no-text-mask',
+        'flat': 'stroke-fill-sampled',
+        'telea': 'stroke-inpaint',
+        'lama_full_page': 'stroke-inpaint',
+    }
+    appearance['erase_method'] = method_names[prepared.erase_method]
+    appearance['erase_mask_coverage'] = prepared.mask_result.coverage
+    appearance['should_skip'] = bool(
+        prepared.decision.requires_review or not prepared.decision.safe
+    )
+    text_bgr = appearance['text_color']
+    appearance['text_color'] = (text_bgr[2], text_bgr[1], text_bgr[0])
+    return appearance
+
+
 def erase_text_region(image, bbox, source_lang='ja', prepared=None):
     """
     Analyze surrounding background and fill the bbox area with appropriate color.
@@ -1068,21 +1087,11 @@ def erase_text_region(image, bbox, source_lang='ja', prepared=None):
         tuple: (image, text_color_rgb, appearance_info)
     """
     if prepared is not None:
-        appearance = _decide_text_appearance(asdict(prepared.region))
+        appearance = appearance_for_prepared(prepared)
         erase_result = erase_prepared_block(image, prepared)
-        method_names = {
-            'preserve': 'no-text-mask',
-            'flat': 'stroke-fill-sampled',
-            'telea': 'stroke-inpaint',
-            'lama_full_page': 'stroke-inpaint',
-        }
-        appearance['erase_method'] = method_names[erase_result.method]
-        appearance['erase_mask_coverage'] = prepared.mask_result.coverage
         if erase_result.warning:
             appearance['erase_warning'] = erase_result.warning
-        text_bgr = appearance['text_color']
-        text_color_rgb = (text_bgr[2], text_bgr[1], text_bgr[0])
-        return image, text_color_rgb, appearance
+        return image, appearance['text_color'], appearance
 
     x1, y1, x2, y2 = [max(0, int(v)) for v in bbox]
     h_img, w_img = image.shape[:2]

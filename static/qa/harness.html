@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QA Harness - Manual Mode V2</title>
+<link rel="stylesheet" href="/static/css/correction.css">
+<style>body{min-height:100vh}</style>
+</head>
+<body>
+
+<div class="corr-topbar">
+  <a href="/" class="corr-logo">← Quay lại</a>
+  <span class="corr-title" id="corr-title">QA Harness</span>
+  <span class="corr-stats"><span id="total-blocks">0</span> bóng thoại · 1 ảnh</span>
+</div>
+
+<div class="corr-toolbar">
+  <div class="tool-group" role="group" aria-label="Công cụ">
+    <button class="tool-btn active" id="tool-select" aria-pressed="true">🖱️ Chọn</button>
+    <button class="tool-btn" id="tool-add" aria-pressed="false">＋ Thêm</button>
+    <button class="tool-btn" id="tool-delete" aria-pressed="false">🗑️ Xoá</button>
+    <button class="tool-btn" id="tool-undo" aria-pressed="false">↩ Undo</button>
+    <button class="tool-btn" id="tool-redo" aria-pressed="false">↪ Redo</button>
+    <button class="tool-btn" id="tool-reset" aria-pressed="false">↺ Reset</button>
+  </div>
+  <div class="zoom-group" aria-label="Điều khiển zoom">
+    <button class="zoom-btn" id="zoom-out" title="Thu nhỏ (-)">−</button>
+    <span class="zoom-label" id="zoom-label">Fit</span>
+    <button class="zoom-btn" id="zoom-in" title="Phóng to (+)">＋</button>
+    <button class="zoom-btn" id="zoom-fit" title="Vừa màn hình">Fit</button>
+    <button class="zoom-btn" id="zoom-actual" title="Kích thước thật">100%</button>
+  </div>
+  <span class="shortcuts" id="shortcuts-hint"><kbd>S</kbd> Chọn <kbd>D</kbd> Xoá <kbd>Ctrl+Z</kbd> Undo</span>
+</div>
+
+<div class="corr-hints" id="corr-hints" role="status" aria-live="polite"></div>
+
+<div class="corr-body" id="corr-body">
+  <div class="corr-sidebar">
+    <div id="image-thumbnails">
+      <div class="thumb-item active" data-index="0">
+        <canvas class="thumb-canvas" id="thumb-0"></canvas>
+        <span class="thumb-name">qa1</span>
+        <span class="thumb-count" id="thumb-count-0">0 blocks</span>
+        <span class="thumb-badge">chưa lưu</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="corr-canvas-wrap">
+    <button id="btn-toggle-editor" class="editor-toggle" aria-expanded="false" aria-controls="block-editor">📐 Thuộc tính</button>
+    <div class="canvas-outer">
+      <canvas id="main-canvas" role="img" aria-label="Ảnh chỉnh sửa"></canvas>
+    </div>
+    <div class="canvas-nav">
+      <button id="btn-prev" class="nav-btn">← Trước</button>
+      <span id="current-image-label"></span>
+      <button id="btn-next" class="nav-btn">Sau →</button>
+    </div>
+  </div>
+
+  <div class="corr-editor" id="block-editor">
+    <div class="editor-head">
+      <h3>Thuộc tính</h3>
+      <button id="btn-close-editor" class="editor-close" aria-label="Đóng bảng thuộc tính">✕</button>
+    </div>
+    <div id="block-properties">
+      <p class="no-sel">Chọn bóng thoại để chỉnh sửa</p>
+    </div>
+    <div class="ocr-status" id="ocr-status"></div>
+  </div>
+</div>
+
+<div class="corr-footer" id="corr-footer">
+  <a href="/" class="btn-outline" id="btn-cancel">↩ Về kết quả</a>
+  <button id="btn-rerender-one" class="btn-primary">🔄 Re-render ảnh này</button>
+  <button id="btn-save-all" class="btn-primary">✅ Lưu tất cả & Về kết quả</button>
+  <button id="btn-continue" class="btn-primary" style="display:none">✅ Tiếp tục dịch & Render</button>
+</div>
+
+<form id="continue-form" method="POST" action="/continue-translate" style="display:none;">
+  <input type="hidden" name="session_id" value="qa">
+  <input type="hidden" name="modified_blocks" id="modified-blocks-input">
+</form>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+window.CORRECTION_DATA = {
+  sessionId: 'a0000000-0000-0000-0000-000000000002',
+  images: [{
+    name: 'qa1',
+    data: '__IMG_B64__',
+    blocks: [
+      { text: 'kono sekai', translated: 'The gioi nay', bbox: [60, 60, 300, 160] },
+      { text: 'ohayou', translated: 'Chao buoi sang', bbox: [360, 60, 600, 170] },
+      { text: 'sayounara', translated: 'Tam biet', bbox: [60, 280, 320, 400] }
+    ]
+  }],
+  mode: '__MODE__',
+  postrenderImageIdx: 0
+};
+</script>
+<script>
+// ---- Harness-only: make requestAnimationFrame deterministic (virtual-time
+// headless can drop frames, which wedges the requestDraw/requestThumbnails
+// guards). Real browsers fire rAF at 60fps; this shim only affects the QA page.
+window.requestAnimationFrame = function (cb) { return setTimeout(function () { cb(Date.now()); }, 16); };
+window.cancelAnimationFrame = function (id) { clearTimeout(id); };
+</script>
+<script src="/static/js/correction.js"></script>
+<script>
+(function () {
+  var MODE = '__MODE__';
+  var results = [];
+  var canvas = document.getElementById('main-canvas');
+  var totalEl = document.getElementById('total-blocks');
+
+  function tick(ms) { return new Promise(function (r) { setTimeout(r, ms || 60); }); }
+  function waitFor(cond, timeoutMs, stepMs) {
+    return new Promise(function (resolve) {
+      var start = Date.now();
+      var iv = setInterval(function () {
+        if (cond() || Date.now() - start > timeoutMs) { clearInterval(iv); resolve(cond()); }
+      }, stepMs || 50);
+    });
+  }
+  function log(name, ok, detail) { results.push({ name: name, ok: !!ok, detail: detail || '' }); }
+
+  function ev(type, ix, iy, opts) {
+    var o = opts || {};
+    var r = canvas.getBoundingClientRect();
+    var clientX = r.left + ix * (r.width / canvas.width);
+    var clientY = r.top + iy * (r.height / canvas.height);
+    canvas.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, clientX: clientX, clientY: clientY,
+      pointerId: o.pointerId || 1, pointerType: o.pointerType || 'mouse', button: 0,
+      buttons: type === 'pointerup' ? 0 : 1, shiftKey: !!o.shiftKey
+    }));
+  }
+  function key(k, opts) {
+    var o = opts || {};
+    document.dispatchEvent(new KeyboardEvent('keydown', {
+      key: k, bubbles: true, cancelable: true, ctrlKey: !!o.ctrlKey, shiftKey: !!o.shiftKey
+    }));
+  }
+  function editorVal(id) {
+    var el = document.getElementById(id);
+    return el ? el.value : null;
+  }
+  function totalBlocks() { return parseInt(totalEl.textContent, 10); }
+  function selectBlock() {
+    ev('pointerdown', 180, 110);
+    ev('pointerup', 180, 110);
+  }
+
+  function run() {
+    var mode = MODE;
+    var suite = mode === 'postrender' ? runPostrender : runPreview;
+    suite().then(function () { finish(); }).catch(function (e) {
+      results.push({ name: 'EXCEPTION', ok: false, detail: String(e && e.message || e) });
+      finish();
+    });
+  }
+
+  function finish() {
+    var pre = document.createElement('pre');
+    pre.id = 'qa-results';
+    pre.textContent = JSON.stringify(results, null, 1);
+    document.body.appendChild(pre);
+    document.title = 'QA-DONE ' + results.filter(function (r) { return r.ok; }).length + '/' + results.length;
+  }
+
+  var nudgeStart = 0;
+  var nudgeV1 = 0;
+  function runPreview() {
+    return tick(900).then(function () {
+      // init
+      log('init_aria', canvas.getAttribute('role') === 'img' && canvas.getAttribute('aria-label').indexOf('bóng thoại') >= 0, canvas.getAttribute('aria-label'));
+      log('init_blocks', totalBlocks() === 3, 'total=' + totalBlocks());
+
+      // select block 0
+      selectBlock();
+      return tick();
+    }).then(function () {
+      log('select_editor', editorVal('edit-x1') === '60', 'x1=' + editorVal('edit-x1'));
+      log('select_size', /240×100/.test(document.getElementById('prop-size').textContent), document.getElementById('prop-size').textContent);
+
+      // handle pixels at SE (300,160): poll until the selection redraw lands
+      var c2d = canvas.getContext('2d');
+      function pxAt(x, y) { var d = c2d.getImageData(x, y, 1, 1).data; return [d[0], d[1], d[2], d[3]].join(','); }
+      return waitFor(function () {
+        var p = c2d.getImageData(300, 160, 1, 1).data;
+        return p[1] > 170 && p[0] < 90;
+      }, 4000, 80).then(function (green) {
+        var dbg = 'se=' + pxAt(300,160) + ' seTL=' + pxAt(297,157) + ' nw=' + pxAt(60,60) + ' fill=' + pxAt(180,110) + ' label=' + pxAt(60,48) + ' cw=' + canvas.width + ' ch=' + canvas.height;
+        log('handle_pixel', green, dbg);
+      });
+    }).then(function () {
+      // resize SE: (300,160) -> (420,280)
+      ev('pointerdown', 300, 160);
+      ev('pointermove', 420, 280);
+      ev('pointerup', 420, 280);
+      return tick();
+    }).then(function () {
+      log('resize_x2', editorVal('edit-x2') === '420', 'x2=' + editorVal('edit-x2'));
+      log('resize_y2', editorVal('edit-y2') === '280', 'y2=' + editorVal('edit-y2'));
+
+      // undo resize
+      key('z', { ctrlKey: true });
+      return tick();
+    }).then(function () {
+      selectBlock();
+      return tick();
+    }).then(function () {
+      log('undo_resize', editorVal('edit-x2') === '300', 'x2=' + editorVal('edit-x2'));
+
+      // TOUCH (A2.6/A9.2): re-select block 0, then touch near the SE handle
+      // (14px away — outside the 10px mouse radius, inside the 44x44 area).
+      selectBlock();
+      return tick();
+    }).then(function () {
+      ev('pointerdown', 288, 148, { pointerType: 'touch', pointerId: 7 });
+      ev('pointermove', 390, 250, { pointerType: 'touch', pointerId: 7 });
+      ev('pointerup', 390, 250, { pointerType: 'touch', pointerId: 7 });
+      return tick();
+    }).then(function () {
+      log('touch_resize', editorVal('edit-x2') === '390' && editorVal('edit-y2') === '250', 'x2=' + editorVal('edit-x2') + ' y2=' + editorVal('edit-y2'));
+
+      // delete mode via 'd'
+      key('d');
+      return tick();
+    }).then(function () {
+      var hints = document.getElementById('corr-hints');
+      log('delete_hint', hints.classList.contains('show') && hints.textContent.indexOf('xoá') >= 0, hints.textContent);
+      var before = totalBlocks();
+      ev('pointerdown', 180, 110);
+      ev('pointerup', 180, 110);
+      return tick();
+    }).then(function () {
+      var before = 3;
+      log('delete_click', totalBlocks() === before - 1, 'total=' + totalBlocks());
+      var toast = document.getElementById('toast');
+      var hasUndoBtn = !!document.querySelector('.toast-action');
+      log('delete_toast', toast.textContent.indexOf('Đã xoá') >= 0 && hasUndoBtn, toast.textContent);
+      var btn = document.querySelector('.toast-action');
+      if (btn) btn.click();
+      return tick();
+    }).then(function () {
+      log('delete_undo', totalBlocks() === 3, 'total=' + totalBlocks());
+
+      // drag > 6px does not delete
+      key('d');
+      return tick();
+    }).then(function () {
+      ev('pointerdown', 180, 110);
+      ev('pointermove', 200, 130);
+      ev('pointerup', 200, 130);
+      return tick();
+    }).then(function () {
+      log('delete_drag', totalBlocks() === 3, 'total=' + totalBlocks());
+
+      // Esc exits delete mode
+      key('Escape');
+      return tick();
+    }).then(function () {
+      var sel = document.getElementById('tool-select');
+      var del = document.getElementById('tool-delete');
+      log('esc_exit_delete', del.getAttribute('aria-pressed') === 'false' && sel.getAttribute('aria-pressed') === 'true', 'del=' + del.getAttribute('aria-pressed'));
+
+      // nudge: select block 0, ArrowRight +1, Shift+ArrowRight +10
+      selectBlock();
+      return tick();
+    }).then(function () {
+      nudgeStart = parseInt(editorVal('edit-x1'), 10);
+      key('ArrowRight');
+      return tick();
+    }).then(function () {
+      nudgeV1 = parseInt(editorVal('edit-x1'), 10);
+      key('ArrowRight', { shiftKey: true });
+      return tick();
+    }).then(function () {
+      var v2 = parseInt(editorVal('edit-x1'), 10);
+      log('nudge_one', nudgeV1 === nudgeStart + 1, 'x1=' + nudgeV1 + ' start=' + nudgeStart);
+      log('nudge_shift', v2 === nudgeStart + 11, 'x1=' + v2 + ' start=' + nudgeStart);
+
+      // coord clamp: x2 = 99999 -> blur -> clamp to 640
+      var inp = document.getElementById('edit-x2');
+      inp.value = '99999';
+      inp.dispatchEvent(new Event('blur', { bubbles: true }));
+      return tick();
+    }).then(function () {
+      log('clamp_x2', editorVal('edit-x2') === '640', 'x2=' + editorVal('edit-x2'));
+      log('suite_preview_done', true, '');
+    });
+  }
+
+  function runPostrender() {
+    return tick(900).then(function () {
+      log('post_mode_class', document.body.classList.contains('mode-postrender'), '');
+      log('post_hidden_add', document.getElementById('tool-add').style.display === 'none', 'display=' + document.getElementById('tool-add').style.display);
+      log('post_hidden_reset', document.getElementById('tool-reset').style.display === 'none', '');
+      log('post_footer', !!document.getElementById('btn-rerender-one') && !!document.getElementById('btn-save-all'), '');
+      log('post_rerender_disabled_clean', document.getElementById('btn-rerender-one').disabled, 'disabled=' + document.getElementById('btn-rerender-one').disabled);
+
+      // select block 0 -> dirty via text edit
+      selectBlock();
+      return tick();
+    }).then(function () {
+      var ta = document.getElementById('edit-text');
+      log('post_textarea_label', document.querySelector('#block-properties label').textContent === 'Bản dịch', document.querySelector('#block-properties label').textContent);
+      ta.value = 'Noi dung moi';
+      ta.dispatchEvent(new Event('input', { bubbles: true }));
+      return waitFor(function () { return document.querySelector('.thumb-item').classList.contains('dirty'); }, 4000, 60);
+    }).then(function (badgeOk) {
+      var thumb = document.querySelector('.thumb-item');
+      var badge = document.querySelector('.thumb-badge');
+      var one = document.getElementById('btn-rerender-one');
+      var aria = canvas.getAttribute('aria-label');
+      log('post_dirty_badge', badgeOk && getComputedStyle(badge).display !== 'none', 'dirty=' + thumb.classList.contains('dirty') + ' aria=[' + aria + '] badgeDisplay=' + getComputedStyle(badge).display);
+      // canvas pixel: dirty label chip of block 1 (not selected) should be orange #ff9100
+      var c2d = canvas.getContext('2d');
+      var d0 = c2d.getImageData(370, 40, 1, 1).data;  // block1 label chip (x=360.., y=40..58)
+      log('post_dirty_canvas', d0[0] > 200 && d0[1] < 180 && d0[2] < 100, 'labelPx=' + [d0[0], d0[1], d0[2], d0[3]].join(','));
+      log('post_rerender_enabled', !one.disabled, 'disabled=' + one.disabled);
+
+      // delete a block (click in delete mode)
+      key('d');
+      return tick();
+    }).then(function () {
+      var before = totalBlocks();
+      ev('pointerdown', 180, 110);
+      ev('pointerup', 180, 110);
+      return tick();
+    }).then(function () {
+      log('post_delete', totalBlocks() === 2, 'total=' + totalBlocks());
+
+      // undo restores translated (A6.2)
+      key('z', { ctrlKey: true });
+      return tick();
+    }).then(function () {
+      log('post_undo_restores', totalBlocks() === 3, 'total=' + totalBlocks());
+      var tu = document.querySelector('.thumb-item');
+      var au = canvas.getAttribute('aria-label');
+      log('post_undo_dirty', tu.classList.contains('dirty'), 'dirty=' + tu.classList.contains('dirty') + ' aria=[' + au + ']');
+
+      // RE-RENDER (real backend): click btn-rerender-one, poll for success
+      var one = document.getElementById('btn-rerender-one');
+      one.click();
+      return new Promise(function (resolve) {
+        var tries = 0;
+        var iv = setInterval(function () {
+          tries++;
+          var thumb = document.querySelector('.thumb-item');
+          var toast = document.getElementById('toast');
+          if (!thumb.classList.contains('dirty') && one.disabled) {
+            clearInterval(iv);
+            log('post_rerender_ok', true, 'badge cleared, button disabled');
+            log('post_rerender_toast', toast.textContent.indexOf('render lại') >= 0, toast.textContent);
+            resolve();
+          } else if (tries > 120) {
+            clearInterval(iv);
+            log('post_rerender_ok', false, 'timeout; toast=' + toast.textContent + ' dirty=' + thumb.classList.contains('dirty') + ' disabled=' + one.disabled);
+            resolve();
+          }
+        }, 400);
+      });
+    }).then(function () {
+      log('suite_postrender_done', true, '');
+    });
+  }
+
+  window.addEventListener('load', function () {
+    setTimeout(run, 300);
+  });
+})();
+</script>
+</body>
+</html>

@@ -27,6 +27,7 @@ for stream in (sys.stdout, sys.stderr):
 from translator.translator import MangaTranslator
 from add_text import (
     add_text_bbox,
+    appearance_for_prepared,
     assess_erasability,
     erase_text_region,
     merge_nearby_ocr_blocks,
@@ -36,6 +37,7 @@ from add_text import (
     sort_ocr_blocks_reading_order,
 )
 from ocr.chrome_lens_ocr import ChromeLensOCR
+from vision.app_adapter import build_optional_vision_adapter
 from PIL import Image
 import numpy as np
 import base64
@@ -452,6 +454,260 @@ def encode_image_jpeg(image, quality=95):
     return base64.b64encode(buffer.tobytes()).decode("utf-8")
 
 
+# ── Post-render editing (Manual Mode V2) ────────────────────────────────────
+# render_plan lives in session.json (only for manual-correction sessions that
+# finished a first render). Every re-render starts from the ORIGINAL page_<i>.jpg
+# (all_ocr_results is never mutated), so re-rendering is always idempotent.
+# Contract (docs/manual-mode-v2-spec.md §4):
+#   render_plan[i] = {"name", "erase_regions": [[x1,y1,x2,y2], ...],
+#                    "blocks": [{"text", "translated", "bbox"}]}
+#   page_<i>_rendered.jpg  = persisted last-rendered image (JPEG q92)
+RENDERED_JPEG_QUALITY = 92
+
+
+def _save_rendered_jpeg(session_id, idx, image):
+    """Persist a rendered image as page_<i>_rendered.jpg (JPEG q92)."""
+    base = _safe_session_path(session_id)
+    if not base:
+        return
+    os.makedirs(base, exist_ok=True)
+    rendered_path = os.path.join(base, "page_" + str(idx) + "_rendered.jpg")
+    cv2.imwrite(rendered_path, image, [cv2.IMWRITE_JPEG_QUALITY, RENDERED_JPEG_QUALITY])
+
+
+def _load_rendered_image(session_id, idx, fallback_image=None):
+    """Load page_<i>_rendered.jpg; return None if missing/corrupt."""
+    base = _safe_session_path(session_id)
+    if not base:
+        return None
+    rendered_path = os.path.join(base, "page_" + str(idx) + "_rendered.jpg")
+    if not os.path.exists(rendered_path):
+        return None
+    image = cv2.imread(rendered_path)
+    if image is None:
+        return None
+    if fallback_image is not None and image.shape[:2] != fallback_image.shape[:2]:
+        # Guard against truncated/stale files: never feed a mismatched canvas.
+        return None
+    return image
+
+
+def _normalize_render_plan_entry(entry, image_shape=None):
+    """Validate/repair one render_plan entry. Returns a cleaned entry or None.
+
+    Keeps old sessions working: malformed entries are dropped, empty-but-
+    recoverable entries get erase_regions rebuilt from all_ocr_results bboxes.
+    """
+    if not isinstance(entry, dict):
+        return None
+    blocks_raw = entry.get("blocks")
+    if not isinstance(blocks_raw, list):
+        return None
+    blocks = []
+    for block in blocks_raw:
+        if not isinstance(block, dict):
+            continue
+        bbox = normalize_bbox_for_json(
+            block.get("bbox"),
+            image_shape=image_shape,
+            expand_ratio=0,
+        )
+        if not bbox:
+            continue
+        blocks.append({
+            "text": str(block.get("text", "") or ""),
+            "translated": str(block.get("translated", "") or ""),
+            "bbox": bbox,
+        })
+    erase_regions = []
+    for region in entry.get("erase_regions", []):
+        normalized = normalize_bbox_for_json(
+            region,
+            image_shape=image_shape,
+            expand_ratio=0,
+        )
+        if normalized:
+            erase_regions.append(normalized)
+    return {"name": str(entry.get("name", "") or ""), "erase_regions": erase_regions, "blocks": blocks}
+
+
+def _iter_plan_blocks(entry):
+    """Yield (original_text, translated_text, bbox) from a cleaned plan entry."""
+    for block in entry.get("blocks", []):
+        yield (
+            block.get("text", "") or "",
+            block.get("translated", "") or "",
+            list(block["bbox"]),
+        )
+
+
+def _render_plan_from_block_lists(names, block_lists):
+    """Build a render_plan from per-image block lists ({text, translated, bbox}).
+
+    erase_regions = bbox of EVERY rendered block so a later re-render always
+    erases the original text under a moved/resized bbox (spec §F5, risk R1).
+    """
+    plan = []
+    for name, blocks in zip(names, block_lists):
+        entry = {
+            "name": name,
+            "erase_regions": [list(b["bbox"]) for b in blocks],
+            "blocks": blocks,
+        }
+        plan.append(entry)
+    return plan
+
+
+def _entry_erase_regions(entry, fallback_ocr_bboxes):
+    """Erase regions for a plan entry; fall back to OCR bboxes (normalized)."""
+    if entry is not None and entry.get("erase_regions"):
+        return [list(r) for r in entry["erase_regions"]]
+    return list(fallback_ocr_bboxes)
+
+
+def _purge_stale_rendered_jpegs(session_id, valid_count):
+    """Remove page_<i>_rendered.jpg beyond the current plan length."""
+    base = _safe_session_path(session_id)
+    if not base:
+        return
+    index = valid_count
+    while True:
+        path = os.path.join(base, "page_" + str(index) + "_rendered.jpg")
+        if not os.path.exists(path):
+            break
+        try:
+            os.remove(path)
+        except OSError:
+            break
+        index += 1
+
+
+def _persist_render_plan(session_id, session_data, render_plan, rendered_images):
+    """Save render_plan + page_*_rendered.jpg into session.json and disk."""
+    cleaned_plan = []
+    for entry in render_plan:
+        normalized = _normalize_render_plan_entry(entry)
+        if normalized is not None:
+            cleaned_plan.append(normalized)
+    session_data["render_plan"] = cleaned_plan
+    _save_session(session_id, session_data)
+    for idx, image in rendered_images.items():
+        _save_rendered_jpeg(session_id, idx, image)
+    _purge_stale_rendered_jpegs(session_id, len(cleaned_plan))
+    return cleaned_plan
+
+
+def render_image_with_blocks(name, image, blocks, font_path, source_lang,
+                             vision_adapter=None, extra_erase_regions=None):
+    """Render one image from its ORIGINAL pixels (no OCR, no translation).
+
+    Args:
+        name: image name (unused, kept for call-site symmetry).
+        image: original BGR numpy image (never mutated).
+        blocks: [{"text": original, "translated": str, "bbox": [x1,y1,x2,y2]}]
+        font_path: font file for translated text.
+        source_lang: language code used by erase heuristics.
+        vision_adapter: optional adapter that erases + reports appearance
+            (determinism across re-renders is NOT guaranteed — spec risk R5).
+        extra_erase_regions: additional regions to erase AFTER the blocks
+            (original text left behind when a bbox was moved/resized, or a
+            deleted block) — spec §F5, risk R2 ordering.
+
+    Returns:
+        (image, render_plan_entry) — image is a new array; entry holds the
+        normalized blocks that were actually rendered.
+    """
+    base = image.copy()
+
+    candidates = []
+    for block in blocks:
+        translated = (block.get("translated") or "").strip()
+        if not translated:
+            continue
+        bbox = normalize_bbox_for_json(block.get("bbox"), image_shape=base.shape, expand_ratio=0)
+        if not bbox:
+            continue
+        candidates.append({
+            "text": str(block.get("text", "") or ""),
+            "translated": translated,
+            "bbox": bbox,
+        })
+
+    render_blocks = []
+    legacy_image = base
+    adapter_completed = False
+    if candidates and vision_adapter is not None:
+        try:
+            execution = vision_adapter.process_page(
+                base,
+                [{"text": item["text"], "bbox": item["bbox"]} for item in candidates],
+            )
+            if len(execution.prepared) != len(candidates):
+                raise RuntimeError(
+                    "vision adapter returned a mismatched prepared block count"
+                )
+            base = execution.erased_image
+            erase_results = list(execution.erase_results)
+            adapter_completed = True
+            for item_index, (item, prepared) in enumerate(zip(candidates, execution.prepared)):
+                appearance = appearance_for_prepared(prepared)
+                if item_index < len(erase_results):
+                    erase_warning = erase_results[item_index].warning
+                    if erase_warning:
+                        appearance["erase_warning"] = erase_warning
+                if appearance.get("should_skip"):
+                    continue
+                render_blocks.append({
+                    "text": item["translated"],
+                    "bbox": item["bbox"],
+                    "text_color": appearance["text_color"],
+                    "appearance": appearance,
+                })
+        except Exception as exc:
+            print("Vision pipeline failed; used legacy erasure: " + str(exc))
+            base = legacy_image
+            adapter_completed = False
+            render_blocks = []
+
+    if candidates and not adapter_completed:
+        for item in candidates:
+            base, text_color, appearance = erase_text_region(
+                base, item["bbox"], source_lang=source_lang
+            )
+            appearance["should_skip"] = False
+            render_blocks.append({
+                "text": item["translated"],
+                "bbox": item["bbox"],
+                "text_color": text_color,
+                "appearance": appearance,
+            })
+
+    # Erase extra regions (original text under moved/resized/deleted bboxes).
+    # Runs AFTER block erasure so appearance sampling is not distorted (R2).
+    if extra_erase_regions:
+        for region in extra_erase_regions:
+            normalized = normalize_bbox_for_json(region, image_shape=base.shape, expand_ratio=0)
+            if not normalized:
+                continue
+            overlaps_current = any(
+                not (normalized[2] <= rb["bbox"][0] or rb["bbox"][2] <= normalized[0]
+                     or normalized[3] <= rb["bbox"][1] or rb["bbox"][3] <= normalized[1])
+                for rb in render_blocks
+            )
+            if overlaps_current:
+                continue
+            base, _, _ = erase_text_region(base, normalized, source_lang=source_lang)
+
+    if render_blocks:
+        base = render_all_blocks(base, render_blocks, font_path)
+
+    plan_blocks = [
+        {"text": item["text"], "translated": item["translated"], "bbox": list(item["bbox"])}
+        for item in candidates
+    ]
+    return base, {"name": name, "erase_regions": [], "blocks": plan_blocks}
+
+
 def build_result_images(processed_results, original_images_by_name=None):
     original_images_by_name = original_images_by_name or {}
     processed_images = []
@@ -474,8 +730,14 @@ def snapshot_original_images(all_ocr_results):
 
 
 def translate_and_render(all_ocr_results, translator_obj, selected_font, translator_type,
-                         source_lang, target_lang, style):
-    """Phase 2+3: Translate all texts then render (used when OCR is already done)"""
+                         source_lang, target_lang, style, *, vision_adapter=None,
+                         collect_render_plan=False):
+    """Phase 2+3: Translate all texts then render (used when OCR is already done)
+
+    Returns a list of {'name', 'image'} results (backward compatible). When
+    collect_render_plan=True, returns (processed_results, render_plan) instead
+    so the manual-mode session can persist post-render editing state.
+    """
     total_images = len(all_ocr_results)
     all_texts = []
     for _, _, blocks in all_ocr_results:
@@ -488,7 +750,14 @@ def translate_and_render(all_ocr_results, translator_obj, selected_font, transla
     if not all_texts:
         print("No text to translate.")
         emit_progress('done', total_images, total_images, 'Không có text để dịch')
-        return [{'name': name, 'image': image} for name, image, _ in all_ocr_results]
+        results = [{'name': name, 'image': image} for name, image, _ in all_ocr_results]
+        if collect_render_plan:
+            empty_plan = [
+                {"name": name, "erase_regions": [], "blocks": []}
+                for name, _, _ in all_ocr_results
+            ]
+            return results, empty_plan
+        return results
     
     # Phase 2: Batch translate
     emit_progress('translation', 0, 1, f'Đang dịch {len(all_texts)} đoạn text...')
@@ -567,14 +836,19 @@ def translate_and_render(all_ocr_results, translator_obj, selected_font, transla
 
     font_path = get_font_path(selected_font)
     processed_results = []
+    render_plan = []
 
     # Prepare rendering data for each image
     skipped_count = 0
 
-    def render_single_image(idx_name_image_blocks):
-        nonlocal skipped_count
-        idx, name, image, blocks = idx_name_image_blocks
-        render_blocks = []
+    # Sequential rendering — ThreadPoolExecutor provides negligible speedup here
+    # because PIL ImageDraw operations hold the GIL, and the progress_lock +
+    # emit_progress calls serialize most of the parallel work anyway.
+    for idx, (name, image, blocks) in enumerate(all_ocr_results):
+        emit_progress('rendering', idx + 1, total_images, f'Render: {name}')
+
+        # Build per-image render candidates (same filtering as before)
+        candidates = []
         for block in blocks:
             text = block.get('text', '').strip()
             if not text:
@@ -588,46 +862,37 @@ def translate_and_render(all_ocr_results, translator_obj, selected_font, transla
                 translated = translated_texts[text_idx]
             else:
                 translated = text
-
             if not translated or not translated.strip():
                 continue
-
             if should_skip_ocr_artifact(text, bbox, image_shape=image.shape,
                                         source_lang=source_lang):
                 skipped_count += 1
                 print(f"  [SKIP OCR ARTIFACT] '{text}'")
                 continue
-
-            # Analyze background and erase original text
-            image, text_color, appearance = erase_text_region(
-                image, bbox, source_lang=source_lang
-            )
-
-            appearance['should_skip'] = False
-            render_blocks.append({
-                'text': translated,
-                'bbox': bbox,
-                'text_color': text_color,
-                'appearance': appearance,
+            candidates.append({
+                'text': text,
+                'translated': translated,
+                'bbox': list(bbox),
             })
 
-        if render_blocks:
-            image = render_all_blocks(image, render_blocks, font_path)
+        rendered_image, plan_entry = render_image_with_blocks(
+            name, image, candidates, font_path, source_lang,
+            vision_adapter=vision_adapter,
+        )
+        processed_results.append({'name': name, 'image': rendered_image})
 
-        return {'name': name, 'image': image}
+        # erase_regions = bbox of EVERY rendered block so a later re-render
+        # always erases the original text under a moved/resized bbox (spec F5/R1).
+        plan_entry['erase_regions'] = [list(item['bbox']) for item in candidates]
+        render_plan.append(plan_entry)
 
-    # Sequential rendering — ThreadPoolExecutor provides negligible speedup here
-    # because PIL ImageDraw operations hold the GIL, and the progress_lock +
-    # emit_progress calls serialize most of the parallel work anyway.
-    for idx, (name, image, blocks) in enumerate(all_ocr_results):
-        emit_progress('rendering', idx + 1, total_images, f'Render: {name}')
-        result = render_single_image((idx, name, image, blocks))
-        processed_results.append(result)
     print("OK Rendering completed")
     if skipped_count > 0:
         print(f"  Skipped {skipped_count} OCR artifact block(s)")
     emit_progress('done', total_images, total_images, f'Hoàn tất! {total_images} ảnh')
 
+    if collect_render_plan:
+        return processed_results, render_plan
     return processed_results
 
 
@@ -835,16 +1100,35 @@ def _do_full_pipeline(all_images, all_ocr_results, all_texts,
     
     original_images_by_name = snapshot_original_images(all_ocr_results)
 
-    processed_results = translate_and_render(
+    vision_adapter = build_optional_vision_adapter()
+    processed_results, render_plan = translate_and_render(
         all_ocr_results, translator_obj, selected_font,
         translator_type=selected_translator,
-        source_lang=source_lang, target_lang=target_lang, style=style
+        source_lang=source_lang, target_lang=target_lang, style=style,
+        vision_adapter=vision_adapter,
+        collect_render_plan=True,
     )
     warning = None
     warning = getattr(translator_obj, "last_warning", None)
     gemini_translator = getattr(translator_obj, "_gemini_translator", None)
     if gemini_translator is not None:
         warning = getattr(gemini_translator, "last_warning", None) or warning
+    
+    # Manual Mode V2: persist render_plan + rendered JPEGs so the post-render
+    # editor can re-render single images without OCR/translation (spec §4.4).
+    if correction_session_id:
+        try:
+            session_data = load_session(correction_session_id)
+            if session_data is not None:
+                rendered_images = {
+                    idx: result['image']
+                    for idx, result in enumerate(processed_results)
+                }
+                _persist_render_plan(
+                    correction_session_id, session_data, render_plan, rendered_images
+                )
+        except Exception as e:
+            print(f"Failed to persist render plan for {correction_session_id}: {e}")
     
     try:
         processed_images = build_result_images(processed_results, original_images_by_name)
@@ -997,6 +1281,421 @@ def ocr_region():
 
     text = " ".join(b.get("text", "").strip() for b in blocks if b.get("text", "").strip())
     return {"text": text}
+
+
+# ── Post-render editing routes (Manual Mode V2, spec §4.1–4.3) ──────────────
+
+def _load_render_plan(session_data):
+    """Return (render_plan, ocr_bboxes) with lazy repair of legacy sessions.
+
+    render_plan: cleaned list of entries (may be shorter than all_ocr_results).
+    ocr_bboxes: per-image list of normalized original bboxes (fallback erase
+    regions and a rebuild source when an entry is missing/corrupt).
+    """
+    all_ocr_results = session_data.get('all_ocr_results', [])
+    ocr_bboxes = []
+    for _, image, blocks in all_ocr_results:
+        image_bboxes = []
+        for block in blocks:
+            bbox = normalize_bbox_for_json(
+                block.get('bbox'), image_shape=image.shape, expand_ratio=0
+            )
+            if bbox:
+                image_bboxes.append(bbox)
+        ocr_bboxes.append(image_bboxes)
+
+    raw_plan = session_data.get('render_plan')
+    if not isinstance(raw_plan, list):
+        # Legacy session (rendered before V2): rebuild a plan from current
+        # OCR blocks so post-render editing still works.
+        plan = []
+        for i, (name, _, blocks) in enumerate(all_ocr_results):
+            if i >= len(ocr_bboxes):
+                continue
+            plan.append({
+                "name": str(name),
+                "erase_regions": list(ocr_bboxes[i]),
+                "blocks": [
+                    {"text": str(b.get('text', '') or ''), "translated": "",
+                     "bbox": normalize_bbox_for_json(
+                         b.get('bbox'), image_shape=None, expand_ratio=0)}
+                    for b in blocks
+                    if normalize_bbox_for_json(
+                        b.get('bbox'), image_shape=None, expand_ratio=0)
+                ],
+            })
+        return plan, ocr_bboxes
+
+    cleaned = []
+    for i, entry in enumerate(raw_plan):
+        image_shape = None
+        if i < len(all_ocr_results):
+            _, image, _ = all_ocr_results[i]
+            image_shape = image.shape
+        normalized = _normalize_render_plan_entry(entry, image_shape=image_shape)
+        if normalized is None:
+            # Repair from OCR blocks when possible (session tolerance).
+            if i < len(all_ocr_results):
+                name, _, blocks = all_ocr_results[i]
+                if i < len(ocr_bboxes):
+                    normalized = {
+                        "name": str(name),
+                        "erase_regions": list(ocr_bboxes[i]),
+                        "blocks": [
+                            {"text": str(b.get('text', '') or ''), "translated": "",
+                             "bbox": normalize_bbox_for_json(
+                                 b.get('bbox'), image_shape=image_shape, expand_ratio=0)}
+                            for b in blocks
+                            if normalize_bbox_for_json(
+                                b.get('bbox'), image_shape=image_shape, expand_ratio=0)
+                        ],
+                    }
+        if normalized is not None:
+            cleaned.append(normalized)
+    return cleaned, ocr_bboxes
+
+
+@app.route("/postrender/<session_id>")
+def postrender_page(session_id):
+    """Post-render editor for one image (spec §4.3).
+
+    Falls back to the OCR correction page when the session has no render_plan
+    (legacy session → risk R3 fallback) and redirects home on missing session.
+    """
+    session_data = load_session(session_id)
+    if session_data is None:
+        return redirect("/")
+
+    if not isinstance(session_data.get("render_plan"), list):
+        # Legacy session (never rendered through V2) — fall back to the OCR
+        # correction page (spec risk R3).
+        return redirect("/correction/" + session_id)
+
+    plan, _ocr_bboxes = _load_render_plan(session_data)
+    if not plan:
+        return redirect("/correction/" + session_id)
+
+    raw_idx = request.args.get("img", "0")
+    try:
+        image_idx = int(raw_idx)
+    except (TypeError, ValueError):
+        image_idx = 0
+    if image_idx < 0 or image_idx >= len(plan):
+        image_idx = 0
+
+    all_ocr_results = session_data['all_ocr_results']
+    if image_idx >= len(all_ocr_results):
+        return redirect("/correction/" + session_id)
+
+    name, original_image, _ = all_ocr_results[image_idx]
+    rendered_image = _load_rendered_image(session_id, image_idx, original_image)
+    if rendered_image is None:
+        # Fall back to the original canvas (blocks still editable).
+        rendered_image = original_image
+
+    _, buffer = cv2.imencode(".jpg", rendered_image, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    encoded = base64.b64encode(buffer.tobytes()).decode("utf-8")
+
+    entry = plan[image_idx]
+    image_data = {
+        "name": str(entry.get("name") or name),
+        "data": encoded,
+        "blocks": [
+            {
+                "text": b.get("text", "") or "",
+                "translated": b.get("translated", "") or "",
+                "bbox": list(b["bbox"]),
+            }
+            for b in entry.get("blocks", [])
+        ],
+        "width": int(rendered_image.shape[1]),
+        "height": int(rendered_image.shape[0]),
+    }
+    total_blocks = sum(len(p.get("blocks", [])) for p in plan)
+    return render_template(
+        "correction.html",
+        session_id=session_id,
+        images=[image_data],
+        total_blocks=total_blocks,
+        mode="postrender",
+        postrender_image_idx=image_idx,
+    )
+
+
+@app.route("/re-render-image", methods=["POST"])
+def rerender_image():
+    """Re-render ONE image from its original pixels (spec §4.1).
+
+    Never calls OCR or the translator — only erase + render. Idempotent:
+    always starts from the ORIGINAL page_<i>.jpg and overwrites the rendered
+    JPEG, so double submits are safe (frontend still locks the button).
+    """
+    session_id = request.form.get("session_id", "")
+    raw_idx = request.form.get("image_idx", "")
+    try:
+        image_idx = int(raw_idx)
+    except (TypeError, ValueError):
+        return {"error": "invalid_image_idx"}, 400
+
+    try:
+        blocks_json = json.loads(request.form.get("blocks_json", "[]"))
+    except (json.JSONDecodeError, TypeError):
+        return {"error": "invalid_blocks_json"}, 400
+    if isinstance(blocks_json, dict):
+        blocks_json = [blocks_json]
+    if not isinstance(blocks_json, list):
+        return {"error": "invalid_blocks_json"}, 400
+
+    try:
+        deleted_regions_json = json.loads(
+            request.form.get("deleted_regions_json", "[]")
+        )
+    except (json.JSONDecodeError, TypeError):
+        return {"error": "invalid_deleted_regions_json"}, 400
+    if isinstance(deleted_regions_json, dict):
+        deleted_regions_json = [deleted_regions_json]
+    if not isinstance(deleted_regions_json, list):
+        return {"error": "invalid_deleted_regions_json"}, 400
+
+    session_data = load_session(session_id)
+    if session_data is None:
+        return {"error": "session_not_found"}, 404
+
+    all_ocr_results = session_data['all_ocr_results']
+    if image_idx < 0 or image_idx >= len(all_ocr_results):
+        return {"error": "invalid_image_idx"}, 400
+
+    plan, ocr_bboxes = _load_render_plan(session_data)
+    old_entry = plan[image_idx] if image_idx < len(plan) else None
+
+    name, original_image, _ = all_ocr_results[image_idx]
+    h, w = original_image.shape[:2]
+
+    blocks = []
+    for raw_block in blocks_json:
+        if not isinstance(raw_block, dict):
+            continue
+        bbox = normalize_bbox_for_json(
+            raw_block.get("bbox"), image_shape=(h, w), expand_ratio=0
+        )
+        if not bbox:
+            return {"error": "invalid_bbox"}, 422
+        blocks.append({
+            "text": str(raw_block.get("text", "") or ""),
+            "translated": str(raw_block.get("translated", "") or "").strip(),
+            "bbox": bbox,
+        })
+
+    deleted_regions = [
+        region for region in (
+            normalize_bbox_for_json(r, image_shape=(h, w), expand_ratio=0)
+            for r in deleted_regions_json
+            if isinstance(r, list)
+        )
+        if region is not None
+    ]
+
+    extra_erase_regions = _entry_erase_regions(
+        old_entry,
+        ocr_bboxes[image_idx] if image_idx < len(ocr_bboxes) else [],
+    ) + deleted_regions
+
+    font_path = get_font_path(session_data.get('selected_font', 'animeace_'))
+    source_lang = session_data.get('source_lang', 'ja')
+    vision_adapter = build_optional_vision_adapter()
+
+    try:
+        rendered_image, new_entry = render_image_with_blocks(
+            name, original_image, blocks, font_path, source_lang,
+            vision_adapter=vision_adapter,
+            extra_erase_regions=extra_erase_regions,
+        )
+    except Exception as exc:
+        print(f"Re-render failed for {session_id}/{image_idx}: {exc}")
+        return {"error": "render_failed"}, 500
+
+    # erase_regions must NEVER shrink: they cover the ORIGINAL text positions
+    # (recorded at the first render) plus deleted blocks. Each re-render starts
+    # from the original image, so persisting the accumulated set keeps re-renders
+    # idempotent and prevents original text from leaking (spec F5, risk R1).
+    if old_entry is not None and old_entry.get("erase_regions"):
+        merged_erase_regions = [list(r) for r in old_entry["erase_regions"]]
+    else:
+        merged_erase_regions = list(
+            ocr_bboxes[image_idx] if image_idx < len(ocr_bboxes) else []
+        )
+    # Accumulate this request's deleted regions so FUTURE re-renders also erase
+    # them (server-side guarantee; independent of what the client re-sends).
+    for region in deleted_regions:
+        if region not in merged_erase_regions:
+            merged_erase_regions.append(region)
+    new_entry["erase_regions"] = merged_erase_regions
+
+    new_plan = []
+    for i in range(max(len(plan), len(all_ocr_results))):
+        if i == image_idx:
+            new_plan.append(new_entry)
+        elif i < len(plan):
+            new_plan.append(plan[i])
+        else:
+            # Preserve never-edited images beyond a short plan.
+            entry_name, _, entry_blocks = all_ocr_results[i]
+            ocr_regions = ocr_bboxes[i] if i < len(ocr_bboxes) else []
+            new_plan.append({
+                "name": str(entry_name),
+                "erase_regions": list(ocr_regions),
+                "blocks": [
+                    {"text": str(b.get('text', '') or ''),
+                     "translated": str(b.get('translated', '') or ''),
+                     "bbox": normalize_bbox_for_json(
+                         b.get('bbox'), image_shape=None, expand_ratio=0)}
+                    for b in entry_blocks
+                    if normalize_bbox_for_json(
+                        b.get('bbox'), image_shape=None, expand_ratio=0)
+                ],
+            })
+
+    _persist_render_plan(session_id, session_data, new_plan, {image_idx: rendered_image})
+
+    response_blocks = [
+        {"text": b.get("text", "") or "",
+         "translated": b.get("translated", "") or "",
+         "bbox": list(b["bbox"])}
+        for b in new_entry.get("blocks", [])
+    ]
+    return {
+        "name": name,
+        "data": encode_image_jpeg(rendered_image, quality=92),
+        "blocks": response_blocks,
+    }
+
+
+@app.route("/translate-result/<session_id>")
+def translate_result_page(session_id):
+    """Show the latest persisted results page for a correction session.
+
+    Used by the post-render editor's "Về kết quả" / cancel buttons (spec §2.3
+    footer). Reads page_*_rendered.jpg when available, else the original.
+    """
+    session_data = load_session(session_id)
+    if session_data is None:
+        return redirect("/")
+
+    all_ocr_results = session_data['all_ocr_results']
+    processed_results = []
+    original_images_by_name = {}
+    for idx, (name, original_image, _) in enumerate(all_ocr_results):
+        rendered_image = _load_rendered_image(session_id, idx, original_image)
+        if rendered_image is None:
+            rendered_image = original_image
+        processed_results.append({"name": name, "image": rendered_image})
+        original_images_by_name[name] = original_image
+    processed_images = build_result_images(processed_results, original_images_by_name)
+    return render_template(
+        "translate.html",
+        images=processed_images,
+        warning=None,
+        correction_session_id=session_id,
+    )
+
+
+@app.route("/re-render-all", methods=["POST"])
+def rerender_all():
+    """Re-render dirty images and return the results page (spec §4.2).
+
+    Iterates only dirty_indices_json; clean images keep their last rendered
+    JPEG. Reuses build_result_images so translate.html stays unchanged.
+    """
+    session_id = request.form.get("session_id", "")
+    try:
+        dirty_indices = json.loads(request.form.get("dirty_indices_json", "[]"))
+    except (json.JSONDecodeError, TypeError):
+        return redirect("/")
+    if isinstance(dirty_indices, int):
+        dirty_indices = [dirty_indices]
+    if not isinstance(dirty_indices, list):
+        return redirect("/")
+
+    session_data = load_session(session_id)
+    if session_data is None:
+        return redirect("/")
+
+    all_ocr_results = session_data['all_ocr_results']
+    plan, ocr_bboxes = _load_render_plan(session_data)
+    font_path = get_font_path(session_data.get('selected_font', 'animeace_'))
+    source_lang = session_data.get('source_lang', 'ja')
+    vision_adapter = build_optional_vision_adapter()
+
+    rendered_images = {}
+    new_plan = list(plan)
+    for raw_idx in dirty_indices:
+        try:
+            image_idx = int(raw_idx)
+        except (TypeError, ValueError):
+            continue
+        if image_idx < 0 or image_idx >= len(all_ocr_results):
+            continue
+        name, original_image, _ = all_ocr_results[image_idx]
+        old_entry = new_plan[image_idx] if image_idx < len(new_plan) else None
+        blocks = [
+            {"text": text, "translated": translated, "bbox": bbox}
+            for text, translated, bbox in _iter_plan_blocks(old_entry)
+        ] if old_entry is not None else []
+        extra_erase_regions = _entry_erase_regions(
+            old_entry,
+            ocr_bboxes[image_idx] if image_idx < len(ocr_bboxes) else [],
+        )
+        try:
+            rendered_image, new_entry = render_image_with_blocks(
+                name, original_image, blocks, font_path, source_lang,
+                vision_adapter=vision_adapter,
+                extra_erase_regions=extra_erase_regions,
+            )
+        except Exception as exc:
+            print(f"Re-render-all failed for {session_id}/{image_idx}: {exc}")
+            continue
+        new_entry["erase_regions"] = (
+            [list(r) for r in old_entry["erase_regions"]]
+            if old_entry is not None and old_entry.get("erase_regions")
+            else (ocr_bboxes[image_idx] if image_idx < len(ocr_bboxes) else [])
+        )
+        while len(new_plan) <= image_idx:
+            entry_name, _, entry_blocks = all_ocr_results[len(new_plan)]
+            entry_regions = ocr_bboxes[len(new_plan)] if len(new_plan) < len(ocr_bboxes) else []
+            new_plan.append({
+                "name": str(entry_name),
+                "erase_regions": list(entry_regions),
+                "blocks": [
+                    {"text": str(b.get('text', '') or ''),
+                     "translated": str(b.get('translated', '') or ''),
+                     "bbox": normalize_bbox_for_json(
+                         b.get('bbox'), image_shape=None, expand_ratio=0)}
+                    for b in entry_blocks
+                    if normalize_bbox_for_json(
+                        b.get('bbox'), image_shape=None, expand_ratio=0)
+                ],
+            })
+        new_plan[image_idx] = new_entry
+        rendered_images[image_idx] = rendered_image
+
+    _persist_render_plan(session_id, session_data, new_plan, rendered_images)
+
+    processed_results = []
+    original_images_by_name = {}
+    for idx, (name, original_image, _) in enumerate(all_ocr_results):
+        rendered_image = _load_rendered_image(session_id, idx, original_image)
+        if rendered_image is None:
+            rendered_image = original_image
+        processed_results.append({"name": name, "image": rendered_image})
+        original_images_by_name[name] = original_image
+    processed_images = build_result_images(processed_results, original_images_by_name)
+
+    return render_template(
+        "translate.html",
+        images=processed_images,
+        warning=None,
+        correction_session_id=session_id,
+    )
 
 
 @app.route("/download-zip", methods=["POST"])

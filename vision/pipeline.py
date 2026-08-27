@@ -69,7 +69,9 @@ class VisionPipeline:
             region = analyze_region(image, bbox)
             if region is None:
                 raise ValueError(f"block {index} has an empty bbox")
-            bubble = _match_bubble(bbox, bubbles)
+            bubble = _match_bubble(
+                bbox, bubbles, self.config.bubble.match_confidence
+            )
             mask_result = self.masker.generate(image, bbox, text, region, bubble)
             decision = score_erasability(region, mask_result, text)
             prepared.append(
@@ -114,8 +116,20 @@ class VisionPipeline:
                     union_mask, _full_mask(blocks[index], image.shape[:2])
                 )
             warning = None
+            actual_method: EraseMethod = "lama_full_page"
             if self.lama_inpainter is None:
-                restored = cv2.inpaint(image, union_mask, 3, cv2.INPAINT_TELEA)
+                if not self.config.allow_cpu_fallback:
+                    raise RuntimeError(
+                        "LaMa runtime unavailable and CPU fallback is disabled"
+                    )
+                restored = image.copy()
+                for index in lama_indexes:
+                    restored = _inpaint_telea_crop(
+                        restored,
+                        _full_mask(blocks[index], image.shape[:2]),
+                        self.config.inpaint.telea_radius,
+                    )
+                actual_method = "telea"
                 warning = (
                     "LaMa runtime is not available yet; used Telea compatibility "
                     "fallback"
@@ -133,13 +147,22 @@ class VisionPipeline:
                         raise ValueError("LaMa output must match the input image shape")
                     last_run = getattr(self.lama_inpainter, "last_run", None)
                     warning = getattr(last_run, "warning", None)
+                    run_mode = getattr(last_run, "mode", None)
+                    if run_mode == "telea_fallback" or (
+                        warning and "telea" in str(warning).lower()
+                    ):
+                        actual_method = "telea"
                 except Exception as exc:
-                    restored = cv2.inpaint(
-                        image,
-                        union_mask,
-                        self.config.inpaint.telea_radius,
-                        cv2.INPAINT_TELEA,
-                    )
+                    if not self.config.allow_cpu_fallback:
+                        raise
+                    restored = image.copy()
+                    for index in lama_indexes:
+                        restored = _inpaint_telea_crop(
+                            restored,
+                            _full_mask(blocks[index], image.shape[:2]),
+                            self.config.inpaint.telea_radius,
+                        )
+                    actual_method = "telea"
                     warning = f"LaMa failed; used Telea fallback: {exc}"
             output[union_mask > 0] = restored[union_mask > 0]
             elapsed_ms = (perf_counter() - started) * 1000.0
@@ -149,7 +172,7 @@ class VisionPipeline:
                     np.count_nonzero(np.any(image[block_mask] != output[block_mask], axis=1))
                 )
                 results[index] = EraseResult(
-                    method="lama_full_page",
+                    method=actual_method,
                     changed_pixels=changed_pixels,
                     elapsed_ms=elapsed_ms,
                     warning=warning,
@@ -162,21 +185,17 @@ class VisionPipeline:
         ]
         if telea_indexes:
             started = perf_counter()
-            union_mask = np.zeros(image.shape[:2], np.uint8)
             block_masks: dict[int, np.ndarray] = {}
             before_pixels: dict[int, np.ndarray] = {}
             for index in telea_indexes:
                 block_mask = _full_mask(blocks[index], image.shape[:2]) > 0
                 block_masks[index] = block_mask
                 before_pixels[index] = output[block_mask].copy()
-                union_mask[block_mask] = 255
-            restored = cv2.inpaint(
-                output,
-                union_mask,
-                self.config.inpaint.telea_radius,
-                cv2.INPAINT_TELEA,
-            )
-            output[union_mask > 0] = restored[union_mask > 0]
+                output = _inpaint_telea_crop(
+                    output,
+                    block_mask.astype(np.uint8) * 255,
+                    self.config.inpaint.telea_radius,
+                )
             elapsed_ms = (perf_counter() - started) * 1000.0
             for index in telea_indexes:
                 block_mask = block_masks[index]
@@ -322,6 +341,31 @@ def _full_mask(prepared: PreparedBlock, image_shape: tuple[int, int]) -> np.ndar
     return full_mask
 
 
+
+def _inpaint_telea_crop(
+    image: np.ndarray,
+    mask: np.ndarray,
+    radius: int,
+) -> np.ndarray:
+    """Inpaint one bounded context crop and composite only masked pixels."""
+    ys, xs = np.where(mask > 0)
+    if not len(xs):
+        return image.copy()
+    height, width = mask.shape
+    context = max(8, int(radius) * 3)
+    x1 = max(0, int(xs.min()) - context)
+    y1 = max(0, int(ys.min()) - context)
+    x2 = min(width, int(xs.max()) + 1 + context)
+    y2 = min(height, int(ys.max()) + 1 + context)
+    crop = image[y1:y2, x1:x2]
+    crop_mask = mask[y1:y2, x1:x2]
+    restored = cv2.inpaint(crop, crop_mask, radius, cv2.INPAINT_TELEA)
+    output = image.copy()
+    target = output[y1:y2, x1:x2]
+    target[crop_mask > 0] = restored[crop_mask > 0]
+    return output
+
+
 def _choose_erase_method(
     region: RegionAnalysis,
     mask_result: MaskResult,
@@ -368,11 +412,19 @@ def _block_id(index: int, bbox: BBox) -> str:
 
 
 def _match_bubble(
-    bbox: BBox, bubbles: list[BubbleInstance]
+    bbox: BBox,
+    bubbles: list[BubbleInstance],
+    min_confidence: float = 0.0,
 ) -> BubbleInstance | None:
-    if not bubbles:
+    eligible = [
+        bubble for bubble in bubbles
+        if bubble.confidence >= min_confidence
+    ]
+    if not eligible:
         return None
-    best = max(bubbles, key=lambda bubble: _intersection_over_union(bbox, bubble.bbox))
+    best = max(
+        eligible, key=lambda bubble: _intersection_over_union(bbox, bubble.bbox)
+    )
     return best if _intersection_over_union(bbox, best.bbox) > 0 else None
 
 

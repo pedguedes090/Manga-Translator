@@ -11,18 +11,18 @@
 
 <div class="corr-topbar">
   <a href="/" class="corr-logo">← Quay lại</a>
-  <span class="corr-title">✏️ Chỉnh sửa bóng thoại</span>
+  <span class="corr-title">{% if mode == "postrender" %}✏️ Chỉnh sửa sau dịch{% else %}✏️ Chỉnh sửa bóng thoại{% endif %}</span>
   <span class="corr-stats"><span id="total-blocks">{{ total_blocks }}</span> bóng thoại · {{ images|length }} ảnh</span>
 </div>
 
 <div class="corr-toolbar">
-  <div class="tool-group">
-    <button class="tool-btn active" id="tool-select">🖱️ Chọn</button>
-    <button class="tool-btn" id="tool-add">＋ Thêm</button>
-    <button class="tool-btn" id="tool-delete">🗑️ Xoá</button>
-    <button class="tool-btn" id="tool-undo">↩ Undo</button>
-    <button class="tool-btn" id="tool-redo">↪ Redo</button>
-    <button class="tool-btn" id="tool-reset">↺ Reset</button>
+  <div class="tool-group" role="group" aria-label="Công cụ">
+    <button class="tool-btn active" id="tool-select" aria-pressed="true">🖱️ Chọn</button>
+    {% if mode != "postrender" %}<button class="tool-btn" id="tool-add" aria-pressed="false">＋ Thêm</button>{% endif %}
+    <button class="tool-btn" id="tool-delete" aria-pressed="false">🗑️ Xoá</button>
+    <button class="tool-btn" id="tool-undo" aria-pressed="false">↩ Undo</button>
+    <button class="tool-btn" id="tool-redo" aria-pressed="false">↪ Redo</button>
+    {% if mode != "postrender" %}<button class="tool-btn" id="tool-reset" aria-pressed="false">↺ Reset</button>{% endif %}
   </div>
   <div class="zoom-group" aria-label="Điều khiển zoom">
     <button class="zoom-btn" id="zoom-out" title="Thu nhỏ (-)">−</button>
@@ -31,25 +31,29 @@
     <button class="zoom-btn" id="zoom-fit" title="Vừa màn hình">Fit</button>
     <button class="zoom-btn" id="zoom-actual" title="Kích thước thật">100%</button>
   </div>
-  <span class="shortcuts"><kbd>S</kbd> Chọn <kbd>A</kbd> Thêm <kbd>D</kbd> Xoá <kbd>Ctrl+Wheel</kbd> Zoom <kbd>Space</kbd> Kéo ảnh <kbd>←→</kbd> Ảnh</span>
+  <span class="shortcuts" id="shortcuts-hint"><kbd>S</kbd> Chọn <kbd>A</kbd> Thêm <kbd>D</kbd> Xoá <kbd>Ctrl+Wheel</kbd> Zoom <kbd>Space</kbd> Kéo ảnh <kbd>←→</kbd> Ảnh</span>
 </div>
+
+<div class="corr-hints" id="corr-hints" role="status" aria-live="polite"></div>
 
 <div class="corr-body">
   <div class="corr-sidebar">
     <div id="image-thumbnails">
       {% for img in images %}
-      <div class="thumb-item {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}">
+      <div class="thumb-item {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}" role="button" tabindex="0" aria-label="Chuyển đến ảnh {{ img.name }}">
         <canvas class="thumb-canvas" id="thumb-{{ loop.index0 }}"></canvas>
         <span class="thumb-name">{{ img.name }}</span>
         <span class="thumb-count">{{ img.blocks|length }} blocks</span>
+        <span class="thumb-badge">chưa lưu</span>
       </div>
       {% endfor %}
     </div>
   </div>
 
   <div class="corr-canvas-wrap">
+    <button id="btn-toggle-editor" class="editor-toggle" aria-expanded="false" aria-controls="block-editor">📐 Thuộc tính</button>
     <div class="canvas-outer">
-      <canvas id="main-canvas"></canvas>
+      <canvas id="main-canvas" role="img" aria-label="Ảnh chỉnh sửa"></canvas>
     </div>
     <div class="canvas-nav">
       <button id="btn-prev" class="nav-btn">← Trước</button>
@@ -59,7 +63,10 @@
   </div>
 
   <div class="corr-editor" id="block-editor">
-    <h3>Thuộc tính</h3>
+    <div class="editor-head">
+      <h3>Thuộc tính</h3>
+      <button id="btn-close-editor" class="editor-close" aria-label="Đóng bảng thuộc tính">✕</button>
+    </div>
     <div id="block-properties">
       <p class="no-sel">Chọn bóng thoại để chỉnh sửa</p>
     </div>
@@ -68,8 +75,14 @@
 </div>
 
 <div class="corr-footer">
+  {% if mode == "postrender" %}
+  <a href="/translate-result/{{ session_id }}" class="btn-outline" id="btn-cancel">↩ Về kết quả</a>
+  <button id="btn-rerender-one" class="btn-primary">🔄 Re-render ảnh này</button>
+  <button id="btn-save-all" class="btn-primary">✅ Lưu tất cả & Về kết quả</button>
+  {% else %}
   <a href="/" class="btn-outline">Huỷ</a>
   <button id="btn-continue" class="btn-primary">✅ Tiếp tục dịch & Render</button>
+  {% endif %}
 </div>
 
 <form id="continue-form" method="POST" action="/continue-translate" style="display:none;">
@@ -77,12 +90,14 @@
   <input type="hidden" name="modified_blocks" id="modified-blocks-input">
 </form>
 
-<div id="toast" class="toast"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 
 <script>
 window.CORRECTION_DATA = {
     sessionId: {{ session_id | tojson }},
-    images: {{ images | tojson }}
+    images: {{ images | tojson }},
+    mode: {{ (mode | default("preview")) | tojson }},
+    postrenderImageIdx: {{ (postrender_image_idx | default(-1)) | tojson }}
 };
 </script>
 <script src="{{ url_for('static', filename='js/correction.js') }}"></script>
