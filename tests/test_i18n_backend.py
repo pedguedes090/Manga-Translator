@@ -241,7 +241,7 @@ def test_upload_no_images_error_key_and_message(monkeypatch):
 def _form_error(html):
     """Extract the rendered .form-error div (visible UI, not the embedded
     i18n-data dictionaries which legitimately contain both locales)."""
-    match = re.search(r'<div class="form-error">(.*?)</div>', html, re.S)
+    match = re.search(r'<div class="form-error"[^>]*>(.*?)</div>', html, re.S)
     return match.group(1) if match else ""
 
 
