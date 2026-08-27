@@ -19,6 +19,12 @@ models/cache/
 server_*.log
 test_result_phase1.png
 
+# AgentTeams runtime logs
+.agent-teams/**/*.log
+.agent-teams/**/*.out
+.agent-teams/**/*.err
+
+
 .env
 .env.*
 !.env.example
