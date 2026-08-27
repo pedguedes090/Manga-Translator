@@ -1,64 +1,58 @@
 # Manga Translator
 
-Web app Flask để OCR, dịch và render lại chữ trong ảnh manga, manhwa, manhua.
+> ⚡ Translate manga / manhwa / manhua — OCR, translate, erase and re-letter in one tool.
 
-## Chạy nhanh trên Windows
+**Manga Translator** turns raw manga/comic pages into readable translated images. It recognizes text with **OCR**, **translates** it, **erases** the original text, and **renders** clean, re-lettered text — optional WYSIWYG manual editing for speech bubbles.
 
-Khuyến nghị dùng Python 3.10 hoặc 3.11. Đừng cài dependency thẳng vào Python global, hãy để project tự tạo môi trường riêng `.venv`.
+![Homepage](docs/screenshots/homepage.png)
+
+## ✨ Features
+
+- 🔍 **Auto OCR** (Chrome Lens) — detects text blocks and speech bubbles
+- 🌐 **Multi-translator** — Gemini, Local LLM (OpenAI-compatible), Google
+- 🎨 **WYSIWYG editor** — fix speech bubbles, erase, restyle (font / size / color / weight / align)
+- 🖼️ **Batch upload** — JPG, JPEG, PNG, WebP, BMP, TIFF, AVIF
+- 🌍 **10+ target languages** + multilingual UI (Vietnamese / English, auto-detected)
+- 🔑 **Gemini multi-key** — rotates keys on quota / auth errors
+- 📦 **Download** single images or all as ZIP
+
+## 🚀 Quick Start (Windows)
+
+> Recommended: Python **3.10** or **3.11**. The project creates its own `.venv` so it never touches your global Python.
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\setup_venv.ps1
 powershell -ExecutionPolicy Bypass -File .\run_app.ps1
 ```
 
-Mở trình duyệt tại:
+Then open **http://127.0.0.1:5000** in your browser.
 
-```text
-http://127.0.0.1:5000
-```
-
-Nếu máy có nhiều bản Python, chọn rõ bản muốn dùng:
+If you have multiple Python versions, pick one:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\setup_venv.ps1 -PythonVersion 3.10
 ```
 
-Sau khi `.venv` đã tạo xong, lần sau chỉ cần chạy:
+After `.venv` is created, just run `run_app.ps1` next time.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\run_app.ps1
-```
+> 🛠️ **Why `.venv`?** Packages like `opencv-python`, `numpy`, and `pillow` are sensitive to the Python version. A project-local environment keeps dependencies isolated, never breaks your global Python, and is trivial to delete/recreate:
+> ```powershell
+> Remove-Item -Recurse -Force .\.venv
+> powershell -ExecutionPolicy Bypass -File .\setup_venv.ps1
+> ```
 
-## Vì sao dùng `.venv`
+## 🖥️ Manual Run
 
-Mỗi người có thể đang dùng Python khác nhau, ví dụ 3.9, 3.10, 3.11, 3.12. Một số thư viện xử lý ảnh như `opencv-python`, `numpy`, `pillow` khá nhạy với phiên bản Python.
-
-`.venv` giúp:
-
-- Cài dependency riêng cho project này.
-- Không làm hỏng Python global của máy.
-- Dễ xóa và cài lại khi dependency lỗi.
-- Nhiều project khác nhau không đạp package của nhau.
-
-Nếu môi trường bị lỗi, có thể xóa `.venv` rồi tạo lại:
-
-```powershell
-Remove-Item -Recurse -Force .\.venv
-powershell -ExecutionPolicy Bypass -File .\setup_venv.ps1
-```
-
-## Chạy thủ công
-
-Nếu không muốn dùng script:
+**Windows:**
 
 ```powershell
 py -3.10 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe app.py
+.\venv\Scripts\python.exe -m pip install --upgrade pip
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+.\venv\Scripts\python.exe app.py
 ```
 
-Trên macOS/Linux:
+**macOS / Linux:**
 
 ```bash
 python3.10 -m venv .venv
@@ -67,33 +61,29 @@ python3.10 -m venv .venv
 ./.venv/bin/python app.py
 ```
 
-## Chức năng chính
+## 🎬 How It Works
 
-- Upload nhiều ảnh truyện cùng lúc.
-- Hỗ trợ ảnh `JPG`, `JPEG`, `PNG`, `WebP`, `BMP`, `TIFF`, `AVIF`.
-- OCR bằng Chrome Lens.
-- Dừng sau OCR để sửa thủ công block text nếu cần.
-- Dịch bằng Gemini, Local LLM hoặc Google Translate.
-- Gemini hỗ trợ nhập nhiều API key và tự đổi key khi key bị quota/auth lỗi.
-- Xóa text cũ và render text mới vào đúng vùng ảnh.
-- Tải từng ảnh hoặc tải toàn bộ bằng file ZIP.
+1. **Upload** one or more images (choose source + target language).
+2. **OCR** reads the text bubbles.
+3. **Translate** with your engine (Gemini / Local LLM / Google).
+4. **Erase & render** — original text removed, translated text drawn back in.
+5. Optional: fine-tune bubbles in the **editor**, then download.
 
-## Cách dùng
+![Results](docs/screenshots/results.png)
 
-1. Chạy app và mở `http://127.0.0.1:5000`.
-2. Upload ảnh truyện.
-3. Chọn ngôn ngữ nguồn và ngôn ngữ đích.
-4. Chọn bộ dịch:
-   - `Gemini`: dùng API key Gemini.
-   - `Local LLM`: dùng server OpenAI-compatible như LM Studio, Ollama, LocalAI, vLLM.
-   - `Google`: dùng `deep-translator`.
-5. Bật chỉnh sửa thủ công nếu muốn kiểm tra OCR trước khi dịch.
-6. Bấm dịch và chờ progress chạy xong.
-7. Tải ảnh kết quả hoặc ZIP.
+## 🎨 Manual Editor
 
-## Gemini nhiều key
+Open the editorial workspace after OCR to adjust speech bubbles, erase residual text, and style the lettering — font, size, color, bold/italic, alignment — with live WYSIWYG preview.
 
-Trong ô Gemini API Keys, nhập nhiều key bằng xuống dòng, dấu phẩy hoặc dấu chấm phẩy:
+![Editor](docs/screenshots/editor.png)
+
+Mobile friendly too:
+
+![Mobile](docs/screenshots/homepage-mobile.png)
+
+## 🔑 Gemini Multi-Key
+
+Paste multiple keys separated by newline, comma, or semicolon:
 
 ```text
 key_1
@@ -101,31 +91,21 @@ key_2
 key_3
 ```
 
-Khi một key bị quota, invalid, unauthorized hoặc permission lỗi, app sẽ thử key tiếp theo trong phiên dịch đó. Nếu tất cả key lỗi, app giữ nguyên text gốc và hiển thị cảnh báo thay vì crash.
+If a key hits quota / auth / permission errors, the app tries the next key. If all fail, it keeps the original text and shows a warning instead of crashing.
 
-Ô `Model Name` trong phần Gemini cho phép nhập model muốn dùng. Giá trị mặc định là `gemini-3.1-flash-lite` và được lưu trong trình duyệt cho lần sử dụng tiếp theo.
+The **Model Name** field (default `gemini-3.1-flash-lite`) is saved in your browser for next time.
 
-## Local LLM
+## 🤖 Local LLM
 
-Local LLM cần server tương thích OpenAI `/v1/chat/completions`.
-
-Ví dụ:
+Point to any **OpenAI-compatible** `/v1/chat/completions` server:
 
 - LM Studio: `http://localhost:1234`
-- Ollama OpenAI-compatible: `http://localhost:11434`
-- LocalAI/vLLM: tùy cấu hình server của bạn
+- Ollama (OpenAI-compatible): `http://localhost:11434`
+- LocalAI / vLLM: your server's config
 
-Điền thêm tên model đúng với server, ví dụ:
+Enter the model name, e.g. `qwen2.5`, `llama3.2`, `mistral`.
 
-```text
-qwen2.5
-llama3.2
-mistral
-```
-
-## Biến môi trường
-
-Có thể chỉnh khi chạy app:
+## 🌐 Environment Variables
 
 ```powershell
 $env:HOST="127.0.0.1"
@@ -137,70 +117,139 @@ $env:SECRET_KEY="change-me"
 powershell -ExecutionPolicy Bypass -File .\run_app.ps1
 ```
 
-Mặc định:
+| Variable | Default | Description |
+|---|---|---|
+| `HOST` | `127.0.0.1` | Bind address |
+| `PORT` | `5000` | HTTP port |
+| `FLASK_DEBUG` | `0` | Debug mode |
+| `MAX_UPLOAD_MB` | `50` | Max upload size |
+| `SESSION_TTL_SECONDS` | `21600` (6h) | Session lifetime |
+| `SECRET_KEY` | `secret_key` | Flask secret |
 
-- `HOST=127.0.0.1`
-- `PORT=5000`
-- `FLASK_DEBUG=0`
-- `MAX_UPLOAD_MB=50`
-- `SESSION_TTL_SECONDS=21600`
+---
 
-## Docker
+## 🇻🇳 Tiếng Việt
 
-Docker là cách tách biệt mạnh nhất vì không dùng Python của máy host.
+> ⚡ Dịch truyện tranh manga / manhwa / manhua — OCR, dịch, xoá và render lại chữ chỉ trong một công cụ.
 
-Trên Windows có thể build bằng script:
+**Manga Translator** biến các trang truyện gốc thành ảnh dịch dễ đọc. Nó nhận dạng text bằng **OCR**, **dịch** nội dung, **xoá** text gốc, rồi **render** lại chữ mới — kèm trình chỉnh sửa thủ công WYSIWYG cho bóng thoại.
+
+![Trang chủ](docs/screenshots/homepage.png)
+
+### ✨ Tính năng
+
+- 🔍 **OCR tự động** (Chrome Lens) — nhận dạng bóng thoại và khối text
+- 🌐 **Nhiều bộ dịch** — Gemini, Local LLM (tương thích OpenAI), Google
+- 🎨 **Chỉnh sửa WYSIWYG** — sửa bóng thoại, xoá nền, đổi style (font / cỡ / màu / đậm / căn lề)
+- 🖼️ **Tải lên hàng loạt** — JPG, JPEG, PNG, WebP, BMP, TIFF, AVIF
+- 🌍 **10+ ngôn ngữ đích** + giao diện đa ngôn ngữ (Việt / Anh, tự nhận diện)
+- 🔑 **Gemini nhiều key** — tự đổi key khi hết quota / lỗi auth
+- 📦 **Tải ảnh lẻ** hoặc **toàn bộ ZIP**
+
+### 🚀 Chạy nhanh (Windows)
+
+> Nên dùng Python **3.10** hoặc **3.11**. Project tự tạo `.venv` riêng nên không ảnh hưởng Python toàn máy.
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1
+powershell -ExecutionPolicy Bypass -File .\setup_venv.ps1
+powershell -ExecutionPolicy Bypass -File .\run_app.ps1
 ```
 
-Build rồi chạy luôn:
+Mở trình duyệt tại **http://127.0.0.1:5000**.
+
+Nếu máy có nhiều bản Python:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1 -Run
+powershell -ExecutionPolicy Bypass -File .\setup_venv.ps1 -PythonVersion 3.10
 ```
 
-Muốn đổi Python trong container:
+> 🛠️ **Vì sao dùng `.venv`?** Các thư viện xử lý ảnh như `opencv-python`, `numpy`, `pillow` nhạy với phiên bản Python. Môi trường riêng giúp cài dependency độc lập, không hỏng Python toàn máy, dễ xóa/khôi phục:
+> ```powershell
+> Remove-Item -Recurse -Force .\.venv
+> powershell -ExecutionPolicy Bypass -File .\setup_venv.ps1
+> ```
+
+### 🖥️ Chạy thủ công
+
+**Windows:**
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\build.ps1 -PythonVersion 3.10
+py -3.10 -m venv .venv
+.\venv\Scripts\python.exe -m pip install --upgrade pip
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
+.\venv\Scripts\python.exe app.py
 ```
 
-Lệnh Docker thủ công:
+**macOS / Linux:**
 
 ```bash
-docker build -t manga-translator .
-docker run -p 7860:7860 manga-translator
+python3.10 -m venv .venv
+./.venv/bin/python -m pip install --upgrade pip
+./.venv/bin/python -m pip install -r requirements.txt
+./.venv/bin/python app.py
 ```
 
-Mở:
+### 🎬 Cách hoạt động
+
+1. **Tải lên** một hoặc nhiều ảnh (chọn ngôn ngữ nguồn + đích).
+2. **OCR** đọc các bóng thoại.
+3. **Dịch** bằng bộ dịch đã chọn (Gemini / Local LLM / Google).
+4. **Xoá & render** — xoá text gốc, vẽ lại text đã dịch.
+5. Tuỳ chọn: tinh chỉnh bóng thoại trong **trình chỉnh sửa**, rồi tải về.
+
+![Kết quả](docs/screenshots/results.png)
+
+### 🎨 Trình chỉnh sửa thủ công
+
+Sau bước OCR, mở workspace chỉnh sửa để sửa bóng thoại, xoá text sót, và đổi kiểu chữ — font, cỡ, màu, đậm/nghiêng, căn lề — với preview WYSIWYG trực tiếp.
+
+![Trình chỉnh sửa](docs/screenshots/editor.png)
+
+Thân thiện trên điện thoại:
+
+![Mobile](docs/screenshots/homepage-mobile.png)
+
+### 🔑 Gemini nhiều key
+
+Nhập nhiều key cách nhau bằng xuống dòng, dấu phẩy hoặc dấu chấm phẩy:
 
 ```text
-http://127.0.0.1:7860
+key_1
+key_2
+key_3
 ```
 
-## Test
+Khi key bị quota / auth / permission lỗi, app tự thử key kế tiếp. Nếu tất cả lỗi, app giữ nguyên text gốc và hiển thị cảnh báo thay vì crash.
+
+Ô **Model Name** (mặc định `gemini-3.1-flash-lite`) được lưu trong trình duyệt cho lần sau.
+
+### 🤖 Local LLM
+
+Trỏ tới server tương thích **OpenAI** `/v1/chat/completions`:
+
+- LM Studio: `http://localhost:1234`
+- Ollama (tương thích OpenAI): `http://localhost:11434`
+- LocalAI / vLLM: tuỳ cấu hình server
+
+Nhập tên model, ví dụ `qwen2.5`, `llama3.2`, `mistral`.
+
+### 🌐 Biến môi trường
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest translator\test_translator.py -q
+$env:HOST="127.0.0.1"
+$env:PORT="5000"
+$env:FLASK_DEBUG="1"
+$env:MAX_UPLOAD_MB="50"
+$env:SESSION_TTL_SECONDS="21600"
+$env:SECRET_KEY="change-me"
+powershell -ExecutionPolicy Bypass -File .\run_app.ps1
 ```
 
-Nếu chưa có `.venv`, chạy `setup_venv.ps1` trước.
-
-## Dọn file tạm
-
-Các thư mục/file runtime không nên commit:
-
-- `.venv/`
-- `__pycache__/`
-- `.pytest_cache/`
-- `temp_sessions/`
-- `debug_outputs/`
-- `server_*.log`
-
-## Ghi chú
-
-- Nên dùng Python 3.10 hoặc 3.11 cho ổn định dependency.
-- Nếu dùng Python 3.12/3.13 và cài lỗi, hãy tạo lại `.venv` bằng Python 3.10 hoặc 3.11.
-- Khi đổi dependency trong `requirements.txt`, chạy lại `setup_venv.ps1`.
+| Biến | Mặc định | Mô tả |
+|---|---|---|
+| `HOST` | `127.0.0.1` | Địa chỉ bind |
+| `PORT` | `5000` | Cổng HTTP |
+| `FLASK_DEBUG` | `0` | Chế độ debug |
+| `MAX_UPLOAD_MB` | `50` | Kích thước upload tối đa |
+| `SESSION_TTL_SECONDS` | `21600` (6h) | Thời gian sống session |
+| `SECRET_KEY` | `secret_key` | Bí mật Flask |
