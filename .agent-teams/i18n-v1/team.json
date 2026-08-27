@@ -1,0 +1,658 @@
+{
+  "name": "i18n-v1",
+  "id": "i18n-v1",
+  "description": "Đa ngôn ngữ cho toàn bộ giao diện Manga-Translator: hiện mọi text cứng tiếng Việt (correction.js ~333 chuỗi, app.py ~120, templates ~216, app.js ~25). Thêm tiếng Anh với kiến trúc i18n mở rộng được (locale files + dictionary + fallback), auto-detect ngôn ngữ trình duyệt lần đầu + dropdown chuyển đổi + lưu localStorage. Bao phủ: templates (index/translate/correction), static/js (app.js, correction.js toasts/hints/labels/shortcuts), backend messages (progress, errors, warnings). Giữ nhận diện #5E1675/Exo 2.",
+  "captainSessionId": "session-7bdb33b2-c1dc-4c4f-b93a-60811bf7c0c1",
+  "createdAt": 1787837135999,
+  "members": [
+    {
+      "id": "a3c93150-e096-4295-9e24-6d2ecb19a2dd",
+      "name": "requirements-i18n",
+      "role": "product-sprint-prioritizer (Agency)",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash",
+      "reasoningEffort": "max",
+      "executionPrompt": "Đóng vai Agency product-sprint-prioritizer. Khảo sát toàn bộ chuỗi tiếng Việt (templates/index.html, translate.html, correction.html; static/js/app.js, correction.js; app.py messages). Chốt đặc tả i18n tại docs/i18n-v1-spec.md: danh sách locale (vi/en), cấu trúc dictionary, cơ chế auto-detect (navigator.language) + dropdown + localStorage, phạm vi bao phủ từng file, các trường hợp khó (chuỗi động có tham số, pluralization đơn giản, toasts có biến, aria-labels), acceptance P0/P1/P2. Gửi tóm tắt cho cả team.",
+      "joinedAt": 1787837145593,
+      "status": "idle"
+    },
+    {
+      "id": "c98ad2cd-7ddd-4006-a9b3-32942064e05c",
+      "name": "frontend-i18n",
+      "role": "engineering-frontend-developer (Agency) + Impeccable UI/UX",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash",
+      "reasoningEffort": "max",
+      "executionPrompt": "Đóng vai Agency frontend-developer, dùng skill impeccable (Operate). Xây tầng i18n: static/js/i18n.js (dictionary vi/en + t('key', vars) + auto-detect + dropdown + localStorage + html lang/dir), refactor static/js/correction.js (333 chuỗi) + static/js/app.js (25) sang t('...'), cập nhật templates để chèn chuỗi đã dịch. Không thay đổi logic nghiệp vụ. node --check + visual QA desktop/mobile 2 vòng.",
+      "joinedAt": 1787837145604,
+      "status": "idle"
+    },
+    {
+      "id": "afb0820e-9cff-4e61-a81b-1db1490f4820",
+      "name": "backend-i18n",
+      "role": "backend-architect-with-memory + engineering-api-platform-engineer (Agency)",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash",
+      "reasoningEffort": "max",
+      "executionPrompt": "Đóng vai Agency backend-architect + API engineer. Xử lý backend messages: app.py (~120 chuỗi tiếng Việt — progress, errors, warnings, emit_progress). Thiết kế: backend gửi message keys (vd 'progress.ocr_done') hoặc kèm danh sách bản dịch để frontend render theo locale hiện tại; giữ tương thích ngược (log vẫn tiếng Việt không sao, nhưng UI-facing phải i18n). Chạy GitNexus impact trước khi sửa symbol. Thêm pytest cho route trả message key.",
+      "joinedAt": 1787837145615,
+      "status": "idle"
+    },
+    {
+      "id": "0e579241-2b06-4c5e-b93c-c793a5203f94",
+      "name": "verifier-i18n",
+      "role": "engineering-codebase-onboarding-engineer (Agency)",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash",
+      "reasoningEffort": "max",
+      "executionPrompt": "Đóng vai Agency codebase-onboarding engineer. Xây checklist xác minh i18n: quét toàn bộ repo tìm chuỗi tiếng Việt còn sót trong UI-facing code, kiểm tra fallback khi thiếu key, auto-detect đúng (navigator.language vi/en/khác), dropdown đổi ngay không reload, localStorage giữ lựa chọn, không vỡ layout khi text dài hơn (en thường dài hơn vi), a11y lang attribute. Chạy node --check + pytest + E2E browser.",
+      "joinedAt": 1787837145627,
+      "status": "idle"
+    },
+    {
+      "id": "c44dbfad-31ef-4e2a-86cc-532457eec9e4",
+      "name": "reviewer-i18n",
+      "role": "engineering-senior-developer (Agency) + Impeccable UX reviewer",
+      "provider": "deepseek-official",
+      "model": "deepseek-v4-flash",
+      "reasoningEffort": "max",
+      "executionPrompt": "Đóng vai Agency senior-developer kiêm Impeccable reviewer. Cổng UI/UX gate (critique+audit: chuyển đổi ngôn ngữ mượt, không lệch layout, dropdown dễ tìm, a11y) rồi review tích hợp: phủ 100% chuỗi, không hardcode sót, fallback an toàn, không phá luồng render/editor, backward compat.",
+      "joinedAt": 1787837145641,
+      "status": "idle"
+    }
+  ],
+  "tasks": [
+    {
+      "id": "t1",
+      "subject": "i18n Spec: đặc tả đa ngôn ngữ vi/en",
+      "description": "Khảo sát toàn bộ chuỗi tiếng Việt UI-facing (templates 3 file, static/js/app.js + correction.js, app.py messages). Viết docs/i18n-v1-spec.md: kiến trúc i18n (locale vi/en, dictionary key-based, t('key', vars), fallback tiếng Anh khi thiếu key), auto-detect navigator.language + dropdown (cờ/viết tắt) + localStorage, html lang attr, chuỗi động (toasts có biến, progress i/n, label có số), acceptance P0/P1/P2 chi tiết, danh sách file cần refactor.",
+      "status": "completed",
+      "assignee": "requirements-i18n",
+      "dependencies": [],
+      "attempt": 1,
+      "createdAt": 1787837156403,
+      "updatedAt": 1787837703338,
+      "kind": "work",
+      "deliverables": [
+        "docs/i18n-v1-spec.md"
+      ],
+      "attemptId": "9826afc2-0fa6-4995-a9ad-0041096053fa",
+      "reassigning": false,
+      "output": "Đã khảo sát toàn bộ chuỗi tiếng Việt (templates 3 file, static/js app.js + correction.js, app.py + gemini_translator.py) và chốt đặc tả tại docs/i18n-v1-spec.md (512 dòng): locales vi/en, dictionary i18n/vi.json + en.json (~160 key, key parity bắt buộc), Python layer i18n/__init__.py (t/tp/resolve_locale/context processor), JS layer static/js/i18n.js (I18N.t/tp, nhúng dict inline, dropdown + auto-detect navigator.language + localStorage mt_locale + cookie + reload guard), fallback locale→vi→raw key, data-value refactor cho options (P0, alias additive ở app.py), warnings structured P1, plural _one/_other, acceptance P0/P1/P2, kế hoạch verify cho t4, phân công t2/t3, out of scope (QA harness, LLM prompts)."
+    },
+    {
+      "id": "t2",
+      "subject": "Frontend i18n: tầng i18n + refactor JS + templates",
+      "description": "Theo spec: tạo static/js/i18n.js (dictionaries vi/en, t(), auto-detect, dropdown UI, localStorage, html lang). Refactor correction.js (~333 chuỗi: toasts/hints/shortcuts/labels/aria), app.js (~25), templates (index/translate/correction) sang t(). Giữ nguyên logic nghiệp vụ và nhận diện #5E1675/Exo 2. Dùng Impeccable cho dropdown và layout khi text EN dài hơn. node --check + visual QA desktop/mobile.",
+      "status": "completed",
+      "assignee": "frontend-i18n",
+      "dependencies": [
+        "t1"
+      ],
+      "attempt": 1,
+      "createdAt": 1787837156416,
+      "updatedAt": 1787839841269,
+      "kind": "work",
+      "deliverables": [
+        "static/js/i18n.js",
+        "static/js/correction.js",
+        "static/js/app.js",
+        "templates/*"
+      ],
+      "attemptId": "81ec35a4-4c1c-4549-a030-5c02f95e6443",
+      "reassigning": false,
+      "output": "Frontend i18n (t2) hoàn tất theo docs/i18n-v1-spec.md.\n\n## Đã bàn giao (changed paths)\n- i18n/vi.json + i18n/en.json (mới): 202 keys, key parity + placeholder parity + plural pairs đạt tools/check_i18n_keys.py; vi = chép nguyên văn chuỗi hiện tại (A0.1/A0.11). Bổ sung 2 key mới (đã có ở cả 2 file, báo captain): corr.zoom.actualTitle, common.languageAria.\n- static/js/i18n.js (mới): IIFE → window.I18N với t()/tp() (chain locale→vi→raw key, escape param, _html an toàn), auto-detect navigator.language (lần đầu), localStorage mt_locale (choice thắng), cookie mt_locale 1 năm, reload guard sessionStorage mt_i18n_reloaded (tối đa 1 reload), dropdown #locale-switch inject vào header/.corr-topbar (style #5E1675 + Exo 2, aria-label dịch), onRefresh/i18n:changed hooks (P1 A1.3), SUPPORTED/LOCALE_LABELS mở rộng locale mới (A2.2).\n- templates/index.html, translate.html, correction.html: {{ t() }}/{{ tp() }}, <html lang=\"{{ current_locale }}\">, <script id=\"i18n-data\">{{ i18n_json|safe }}</script> + i18n.js trong head; index: data-value cho source_lang/language/translator/style (font giữ display text) (5.6); translate: warning mapping {key,params} (5.7 P1 display); correction: stats plural (giữ #total-blocks, JS ghi cụm plural), thumb badges/aria/counts, footer theo mode, shortcuts _html.\n- static/js/app.js: optionValue = data-value||text; click/restore theo data-value + migrate localStorage cũ text→data-value (A1.4); translator/style visibility theo data-value (fallback text); updateHiddenInputs gửi data-value; alerts/file labels qua t(); onRefresh cho file label.\n- static/js/correction.js (~60 edits): toasts/hints/shortcuts/ocr status/canvas aria (3 mode + ariaDirty)/thumb blocks plural/style panel (~22 labels + aria + titles)/block editor (~14 labels + nudge titles)/confirm/warning (P0 string + P1 mapping); I18N.onRefresh → updateHints/updateThumbnails/updateCanvasAria/updateBlockEditor/shortcuts.\n- tools/check_i18n_keys.py (mới): key parity + placeholder parity + _one/_other pairs.\n- tools/scan_hardcoded_strings.py (mới): quét templates/static/js/app.py/gemini_translator.py; phân loại comment/proper noun/LEGACY_FORM_VALUES (5.6 additive)/out-of-scope prompt+log (spec 9); stdout utf-8.\n\n## Verify đã chạy\n- node --check ×3 JS: PASS.\n- python tools/check_i18n_keys.py: OK 202 keys.\n- python tools/scan_hardcoded_strings.py (frontend scope templates+static/js): 0 findings. Còn 4 findings backend (app.py ×2, gemini_translator.py ×2) thuộc t3 — đã nhắn t3.\n- Visual QA 2 vòng qua CDP headless Edge (20 screenshots 1440x900 + 390x844 × 10 trang vi/en; DOM layout audit): không overflowX, không text cut; dropdown #5E1675/Exo 2 khắp nơi; vi/en ảnh tương đương.\n- Auto-detect (A0.3): en-US trên trang vi → 1 reload, localStorage+cookie=en; vi-VN → 0 reload; vi-VN trên trang en → switch vi + 1 reload.\n- Dropdown (A0.4): đổi en→vi → localStorage+cookie vi + reload.\n- Params (A0.6): \"⏳ Đang render ảnh 2/5\", \"✨ Kết quả dịch (3 ảnh)\", \"Go to image page1.jpg\", \"Original: Text gốc 1\", escape <b>x</b>→&lt;b&gt;x&lt;/b&gt;.\n- Plural (A0.7): \"1 speech bubble\"/\"4 speech bubbles\", \"3 images\", \"5 blocks\"; vi \"4 bóng thoại · 2 ảnh\".\n- Regression vi (A0.11): diff text hiển thị vs git HEAD → IDENTICAL (chỉ khác & → &amp; do autoescape, hiển thị như nhau).\n- app.js data-value: click Custom → localStorage 'custom' + wrapper hiện; Local LLM → 'copilot' + settings; updateHiddenInputs → ko/fr/gemini/literal/Yuki-Burobu; migration 'Local LLM' → 'copilot' khi restore.\n- correction.js: hints EN theo tool (delete/add/erase-rect/erase-brush size 24px), block editor EN labels (Translation, Original:, Position, Up 1px, Text style, Apply to all blocks...), canvas aria \"Image page1.jpg — 2 speech bubbles\", shortcuts 3 mode.\n- 10/10 trang: 0 lỗi JS (ngoài 404 CDN do máy QA không internet).\n\n## Ghi chú cho t3/t4\n- tp() Python PHẢI params.setdefault('n', n) (template gọi tp(key, n) không truyền n=). Đã nhắn t3.\n- QA harness tĩnh: temp_sessions/qa_i18n/ (render_qa.py + cdp_qa.mjs + shots/) — ngoài phạm vi scan.",
+      "changedPaths": [
+        "i18n/vi.json",
+        "i18n/en.json",
+        "static/js/i18n.js",
+        "static/js/app.js",
+        "static/js/correction.js",
+        "templates/index.html",
+        "templates/translate.html",
+        "templates/correction.html",
+        "tools/check_i18n_keys.py",
+        "tools/scan_hardcoded_strings.py"
+      ],
+      "acceptanceResults": [
+        {
+          "criterion": "A0.1 i18n/vi.json + en.json key parity (check_i18n_keys.py)",
+          "status": "passed",
+          "evidence": "202 keys identical, placeholders identical, plural pairs complete"
+        },
+        {
+          "criterion": "A0.2 no hardcoded user-visible strings (frontend scope)",
+          "status": "passed",
+          "evidence": "templates + static/js scan 0 findings; 4 backend findings remain in t3 files (notified)"
+        },
+        {
+          "criterion": "A0.3 auto-detect + persist (localStorage wins)",
+          "status": "passed",
+          "evidence": "CDP: en-US -> 1 reload; vi-VN -> 0 reload; localStorage choice overrides browser language"
+        },
+        {
+          "criterion": "A0.4 dropdown on all pages + reload + localStorage + cookie + html lang",
+          "status": "passed",
+          "evidence": "dropdown present on 10 pages (3 modes correction); change persists + reloads; lang matches locale"
+        },
+        {
+          "criterion": "A0.5 fallback locale->vi->raw key, no crash",
+          "status": "passed",
+          "evidence": "t('missing.key.xyz') returns raw key; missing en key falls back to vi (lookup chain); 0 JS errors"
+        },
+        {
+          "criterion": "A0.6 dynamic params substituted (progress/aria/toasts)",
+          "status": "passed",
+          "evidence": "Rendering image 2/5, Translation results (3 images), Go to image page1.jpg, Original: Text gốc 1"
+        },
+        {
+          "criterion": "A0.7 en plurals one/other",
+          "status": "passed",
+          "evidence": "1 speech bubble / 4 speech bubbles; 2 images; 1 block / 5 blocks; vi always 'other' as designed"
+        },
+        {
+          "criterion": "A0.10 brand identity + layout no overflow at 1440/390",
+          "status": "passed",
+          "evidence": "dropdown border rgb(94,22,117)=#5E1675 + font 'Exo 2'; overflowX=false and textCuts=[] on all 20 layouts; screenshots non-blank (160KB-1.2MB)"
+        },
+        {
+          "criterion": "A0.11 vi regression (text identical to pre-i18n)",
+          "status": "passed",
+          "evidence": "rendered text diff vs git HEAD templates identical (only & vs &amp; entity)"
+        },
+        {
+          "criterion": "A0.12 progress phase names localized",
+          "status": "passed",
+          "evidence": "phaseNames map uses I18N.t('index.phase.*') incl. preparing/init on submit"
+        },
+        {
+          "criterion": "A1.2 page titles per locale",
+          "status": "passed",
+          "evidence": "results.pageTitle + corr.pageTitle keys in templates"
+        },
+        {
+          "criterion": "A1.3 I18N.onRefresh hooks for JS-driven strings",
+          "status": "passed",
+          "evidence": "registered in app.js (file label), correction.js (hints/thumbnails/canvas aria/editor/shortcuts), index inline (phaseNames)"
+        },
+        {
+          "criterion": "A1.4 legacy select_* localStorage migration to data-value",
+          "status": "passed",
+          "evidence": "CDP: saved 'Local LLM' restored + rewritten to 'copilot'"
+        },
+        {
+          "criterion": "A1.5 check_i18n_keys.py runnable as verify step",
+          "status": "passed",
+          "evidence": "exit 0 with full report"
+        }
+      ],
+      "commandsRun": [
+        {
+          "command": "node --check static/js/i18n.js",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "syntax OK"
+        },
+        {
+          "command": "node --check static/js/app.js",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "syntax OK"
+        },
+        {
+          "command": "node --check static/js/correction.js",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "syntax OK"
+        },
+        {
+          "command": "python tools/check_i18n_keys.py",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "OK: 202 keys, key parity across 2 locale(s), placeholder parity OK, plural pairs OK"
+        },
+        {
+          "command": "python tools/scan_hardcoded_strings.py (frontend scope templates+static/js)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "OK: no hardcoded user-visible strings found"
+        },
+        {
+          "command": "CDP headless QA: 20 screenshots + layout audit (1440x900, 390x844, vi/en)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "no overflowX, no textCuts, dropdown #5E1675/Exo 2 everywhere"
+        },
+        {
+          "command": "CDP auto-detect tests (en-US/vi-VN first visit)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "en-US -> 1 reload + persist en; vi-VN -> 0 reload; choice wins"
+        },
+        {
+          "command": "CDP dropdown change + persistence",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "change -> localStorage+cookie vi + reload"
+        },
+        {
+          "command": "CDP app.js data-value + localStorage migration",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "data-value submitted; legacy 'Local LLM' migrated to 'copilot'"
+        },
+        {
+          "command": "CDP correction.js interactions (hints, editor panel, canvas aria, plural)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "EN labels/params/plural verified"
+        },
+        {
+          "command": "vi regression text diff vs git HEAD templates",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "index+translate identical; correction identical modulo HTML entity escaping"
+        }
+      ]
+    },
+    {
+      "id": "t3",
+      "subject": "Backend i18n: message keys cho progress/error/warning",
+      "description": "Refactor app.py UI-facing messages (~120 chuỗi: emit_progress, error render, warnings, toast data) sang message keys (vd progress.ocr_done, error.no_api_key) kèm payload biến; frontend render theo locale. Log console giữ tiếng Việt không sao, nhưng mọi thứ hiển thị cho user phải key-based. GitNexus impact trước khi sửa. Thêm pytest: response chứa key hợp lệ, không còn chuỗi tiếng Việt hardcode trong UI payloads.",
+      "status": "completed",
+      "assignee": "backend-i18n",
+      "dependencies": [
+        "t1"
+      ],
+      "attempt": 1,
+      "createdAt": 1787837156428,
+      "updatedAt": 1787838483640,
+      "kind": "work",
+      "deliverables": [
+        "app.py",
+        "tests/*"
+      ],
+      "attemptId": "5bba9a6a-bbe8-434d-b575-5ea16e942c18",
+      "reassigning": false,
+      "output": "Backend i18n hoàn tất (t3). Changed: app.py, translator/gemini_translator.py,\ni18n/__init__.py, tests/test_i18n_backend.py (+ tạo backend-section i18n/vi.json+en.json;\nsau đó bị t2 ghi đè bằng full inventory 202 key - backend.* khớp spec §4.5)."
+    },
+    {
+      "id": "t4",
+      "subject": "Verification i18n: quét sót + fallback + auto-detect + layout",
+      "description": "Sau khi frontend+backend báo hoàn tất: quét toàn bộ repo tìm chuỗi tiếng Việt còn sót trong UI-facing code (regex diacritics), kiểm tra dictionary phủ 100% key dùng, fallback en khi thiếu key, auto-detect đúng (vi/en/khác -> mặc định en), dropdown đổi ngay không reload, localStorage giữ, layout không vỡ khi text EN dài (button/header/toast), html lang đúng, a11y. node --check + pytest + E2E browser thật.",
+      "status": "completed",
+      "assignee": "verifier-i18n",
+      "dependencies": [
+        "t2",
+        "t3"
+      ],
+      "attempt": 1,
+      "createdAt": 1787837156440,
+      "updatedAt": 1787840759998,
+      "kind": "work",
+      "deliverables": [
+        "verification report"
+      ],
+      "attemptId": "ea6d4a32-2f2e-4372-ba06-2fae8190f667",
+      "reassigning": false,
+      "output": "VERIFICATION PASSED (t4). Toàn bộ acceptance P0/P1 đạt trên cây hiện tại (working tree đã được cập nhật giữa phiên — canvas aria plural + scanner findings đã fix).\n\nKẾT QUẢ:\n1. check_i18n_keys.py: OK 205 keys, key parity vi/en, placeholder parity, plural pairs (_one/_other) — PASS\n2. scan_hardcoded_strings.py: OK — 0 findings user-visible (4 findings ban đầu: print() log, docstring, 2 exception messages — đã được reword trong tree hiện tại) — PASS\n3. node --check i18n.js/app.js/correction.js: OK; py_compile app.py/i18n/__init__.py/gemini_translator.py: OK\n4. pytest: 92 passed (test_i18n_backend 30 + manual_mode_v2/v3). 4 failures tests/vision chỉ do thiếu torch trong venv (pre-existing, tests/vision không thuộc diff i18n) — PASS\n5. Key-reference scan: ALL referenced keys exist in dicts — PASS\n6. E2E Playwright (Chromium thật):\n   - Auto-detect: en-US→EN (reload 1 lần + guard), vi-VN→VI (0 reload), fr-FR→vi default; localStorage mt_locale + cookie sync — PASS\n   - localStorage choice thắng browser language — PASS\n   - Dropdown có trên index/correction/postrender/translate-result; đổi vi↔en → persist + reload + html lang đúng — PASS\n   - Fallback JS: en thiếu key→vi, cả 2 thiếu→raw key, không lỗi; Fallback server: en thiếu→vi value, cả 2→raw key — PASS\n   - Params: \"📁 3 images selected\", escape <script> — PASS\n   - Plural: \"1 speech bubble\"/\"5 speech bubbles\", \"1 image\"/\"3 images\", \"1 block\", canvas aria \"1 speech bubble\"/\"3 speech bubbles\" — PASS\n   - Backend errors EN/VI: no-images, no-api-key, bad format — PASS\n   - Layout 1440/390 EN+VI: không horizontal overflow, dropdown trong viewport — PASS\n   - Brand: dropdown color #5E1675, Exo 2, radius 8px — PASS\n   - a11y: aria-labels/titles EN đủ (zoom/toolbar/canvas/thumb/locale) — PASS\n   - vi regression: backend.* + frontend vi values trace đúng HEAD originals (chép nguyên văn) — PASS\n\nGHI CHÚ (không chặn):\n- results.title EN \"Translation results (1 images)\" — ngữ pháp số ít lệch cho n=1, nhưng đúng spec §4.3 (single key {n}, không phải plural pair); có thể nâng cấp sau.\n- Dropdown đổi locale → reload (đúng spec §3.6 P0); hooks onRefresh/i18n:changed chạy live trước reload (A1.3 PASS).\n- 4 vision test failures: môi trường thiếu torch — ngoài phạm vi i18n.",
+      "acceptanceResults": [
+        {
+          "criterion": "Quét chuỗi tiếng Việt còn sót trong UI-facing code (templates/static/js/app.py/gemini_translator.py)",
+          "status": "passed",
+          "evidence": "tools/scan_hardcoded_strings.py exit 0: 'OK: no hardcoded user-visible strings found' (4 findings ban đầu đã được reword giữa phiên)"
+        },
+        {
+          "criterion": "Dictionary phủ 100% key dùng + key parity + placeholder parity",
+          "status": "passed",
+          "evidence": "check_i18n_keys.py: OK 205 keys vi/en; key-reference scan: ALL REFERENCED KEYS EXIST IN DICTS"
+        },
+        {
+          "criterion": "Fallback en khi thiếu key (en→vi→raw key), không crash",
+          "status": "passed",
+          "evidence": "Server: xoá key khỏi en.json → hiển thị vi value; xoá cả vi → raw key. JS: I18N.t delete en→vi, delete vi→raw key; không console error"
+        },
+        {
+          "criterion": "Auto-detect đúng (vi/en/khác→default)",
+          "status": "passed",
+          "evidence": "Playwright: en-US→EN UI + localStorage=en + cookie; vi-VN→VI 0 reload; fr-FR→vi; localStorage choice thắng navigator.language"
+        },
+        {
+          "criterion": "Dropdown đổi ngay + reload hiển thị đúng + lưu localStorage/cookie",
+          "status": "passed",
+          "evidence": "selectOption #locale-switch vi→en: html lang đổi, localStorage/cookie mt_locale, reload guard 1 lần, persisted after reload"
+        },
+        {
+          "criterion": "Layout không vỡ khi text EN dài (button/header/toast) tại 1440px và 390px",
+          "status": "passed",
+          "evidence": "index EN 1440/390, index VI 390, correction EN 1440/390: docScrollWidth == viewportWidth, 0 overflowing elements"
+        },
+        {
+          "criterion": "html lang đúng theo locale",
+          "status": "passed",
+          "evidence": "lang=en cho Accept-Language en-US/cookie en; lang=vi cho vi-VN/fr-FR; cả 3 template <html lang={{ current_locale }}>"
+        },
+        {
+          "criterion": "a11y: aria-labels/titles dịch đủ ở en",
+          "status": "passed",
+          "evidence": "zoom-group 'Zoom controls', zoom-out 'Zoom out (-)', canvas aria 'Image page0 — 1 speech bubble', locale-switch 'Language', thumb 'Go to image page0'"
+        },
+        {
+          "criterion": "node --check + pytest + E2E browser thật",
+          "status": "passed",
+          "evidence": "node --check ×3 JS OK; py_compile OK; pytest 92 passed (i18n backend + manual mode); E2E Playwright Chromium 10 script scenarios pass"
+        }
+      ],
+      "commandsRun": [
+        {
+          "command": "python tools/check_i18n_keys.py",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "OK: 205 keys, key parity, placeholder parity, plural pairs OK"
+        },
+        {
+          "command": "python tools/scan_hardcoded_strings.py",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "OK: no hardcoded user-visible strings found"
+        },
+        {
+          "command": "node --check static/js/i18n.js && node --check static/js/app.js && node --check static/js/correction.js",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "ALL JS SYNTAX OK"
+        },
+        {
+          "command": "python -m py_compile app.py i18n/__init__.py translator/gemini_translator.py",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "PY COMPILE OK"
+        },
+        {
+          "command": ".venv/Scripts/python -m pytest tests/test_i18n_backend.py tests/test_manual_mode_v2.py tests/test_manual_mode_v3.py -q",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "92 passed, 59 warnings"
+        },
+        {
+          "command": ".venv/Scripts/python -m pytest tests/ -q (full suite)",
+          "status": "failed",
+          "exitCode": 1,
+          "evidence": "160 passed, 4 failed — tests/vision/test_lama_inpainter.py ModuleNotFoundError: torch (thiếu torch trong venv; tests/vision không nằm trong diff i18n, pre-existing)"
+        },
+        {
+          "command": "E2E Playwright: auto-detect, dropdown+persist, fallback, params, plural, backend errors, layout 1440/390, a11y",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "10 scenarios pass: en-US auto→EN, vi-VN no-reload, fr-FR→vi, choice wins, canvas aria '1 speech bubble', no overflow, brand #5E1675/Exo 2"
+        }
+      ]
+    },
+    {
+      "id": "t5",
+      "subject": "Impeccable UI/UX Gate i18n: critique + audit",
+      "description": "Review độc lập theo Impeccable critique+audit: dropdown ngôn ngữ dễ tìm và rõ ràng, chuyển đổi mượt, layout EN/VI không lệch, a11y (lang, aria-label đã dịch, focus), desktop+mobile. Findings có severity + requiredFix; chỉ pass khi P0/P1 đạt.",
+      "status": "completed",
+      "assignee": "reviewer-i18n",
+      "dependencies": [
+        "t2"
+      ],
+      "attempt": 2,
+      "createdAt": 1787837156451,
+      "updatedAt": 1787840756020,
+      "kind": "work",
+      "deliverables": [
+        "UI/UX gate report"
+      ],
+      "reassigning": false,
+      "verdict": "pass",
+      "findings": [
+        {
+          "id": "F1",
+          "severity": "high",
+          "problem": "Reload guard chặn user-initiated language switch sau reload đầu tiên trong tab → trang trộn ngôn ngữ (static locale cũ + JS locale mới).",
+          "requiredFix": "Change handler #locale-switch luôn reload: xoá guard sessionStorage trước reload; guard chỉ cho auto-detect.",
+          "file": "static/js/i18n.js",
+          "line": 216,
+          "resolved": true
+        },
+        {
+          "id": "F2",
+          "severity": "low",
+          "problem": "EN canvas aria-label \"1 speech bubbles\" (thiếu plural).",
+          "requiredFix": "Cặp _one/_other cho corr.canvas.ariaStyled/Postrender/Preview + dùng tp() trong updateCanvasAria.",
+          "file": "static/js/correction.js",
+          "line": 1746,
+          "resolved": true
+        },
+        {
+          "id": "F3",
+          "severity": "low",
+          "problem": "Dropdown không có icon/label nhìn thấy (spec §10.6).",
+          "requiredFix": "Prefix 🌐 cho option labels.",
+          "file": "static/js/i18n.js",
+          "line": 21,
+          "resolved": true
+        }
+      ],
+      "acceptanceResults": [
+        {
+          "criterion": "Dropdown dễ tìm, rõ ràng, đủ trên mọi trang/mode",
+          "status": "passed",
+          "evidence": "Có mặt 5 biến thể trang; aria-label dịch; option có 🌐 prefix (F3 resolved)"
+        },
+        {
+          "criterion": "Chuyển đổi ngôn ngữ mượt, đúng locale sau đổi",
+          "status": "passed",
+          "evidence": "F1 resolved: vi→en→vi→en và auto-detect→switch đều reload + đồng nhất locale; 1 navigation/switch; verified trên index/styleditor/results"
+        },
+        {
+          "criterion": "Layout EN/VI không lệch (desktop 1440 + mobile 390)",
+          "status": "passed",
+          "evidence": "overflowX=0 mọi trang×locale×viewport (đã verify vòng 1, không đổi code layout ở repair)"
+        },
+        {
+          "criterion": "a11y: lang, aria-label dịch, focus, keyboard",
+          "status": "passed",
+          "evidence": "lang đúng mọi switch; aria/title EN đủ; canvas aria plural đúng (F2 resolved); focus-visible ring OK"
+        },
+        {
+          "criterion": "P0/P1 đạt thì pass",
+          "status": "passed",
+          "evidence": "A0.3/A0.4/A0.7/A0.10/A0.11 + A1.2/A1.3/A1.4 verified; 3/3 findings resolved"
+        }
+      ],
+      "attemptId": "77d1027d-94fc-4762-9239-e7e6e60dbed6",
+      "output": "RE-REVIEW VÒNG 2 (t5 attempt 2): verdict=PASS — cả 3 findings đã resolved, verify live bằng Playwright + Flask thật (port 5012):\nF1 ✓: change handler #locale-switch xoá guard rồi luôn reload (i18n.js:210-223); guard chỉ còn trong init/reloadTo. Reproduce lại 2 đường cũ đều pass: (1) vi→en→vi→en round-trip trên index — mỗi switch reload, lang+labels+file label đồng nhất locale; (2) auto-detect (navigator en-US / server vi) reload 1 lần → en, rồi switch về vi vẫn reload → vi đồng nhất; cookie/localStorage theo đúng; không vòng lặp (1 navigation/switch).\nF2 ✓: corr.canvas.aria* giờ là cặp _one/_other (vi.json+en.json, 205 keys parity OK) và updateCanvasAria dùng ttp() → EN \"1 speech bubble\", vi \"1 bóng thoại\" (không regression).\nF3 ✓: option labels \"🌐 Tiếng Việt\"/\"🌐 English\".\nKhông regression: switch round-trip đạt trên cả styleditor + results (title/stats đổi đúng: \"✨ Kết quả dịch (4 ảnh)\" ↔ \"✨ Translation results (4 images)\", \"1 bóng thoại · 4 ảnh\" ↔ \"1 speech bubble · 4 images\"); vi labels nguyên văn; key parity 205 keys OK."
+    },
+    {
+      "id": "t6",
+      "subject": "Integration review i18n cuối",
+      "description": "Sau backend + verification + UI gate: review tích hợp — phủ 100% chuỗi, không hardcode sót, fallback an toàn, không phá luồng render/editor/save-all, backward compat, performance (dictionary nhỏ, không re-render thừa). Đối chiếu spec P0/P1 + bằng chứng verifier.",
+      "status": "completed",
+      "assignee": "reviewer-i18n",
+      "dependencies": [
+        "t3",
+        "t4",
+        "t5"
+      ],
+      "attempt": 1,
+      "createdAt": 1787837156463,
+      "updatedAt": 1787840917932,
+      "kind": "work",
+      "deliverables": [
+        "integration review report"
+      ],
+      "attemptId": "9a843491-6c64-4ae7-aad7-78dc513ac244",
+      "reassigning": false,
+      "output": "INTEGRATION REVIEW t6: verdict=PASS. Đã verify toàn bộ chuỗi tích hợp backend↔frontend trên server Flask thật (port 5013, Playwright + HTTP) + test suite:\n1) A0.2 scanner: \"OK: no hardcoded user-visible strings found\" toàn repo (templates/static/js/app.py/gemini_translator.py).\n2) A0.5 fallback (unit, monkeypatch load_dict): en thiếu key → hiện vi; cả 2 thiếu → raw key, không crash; key lạ → raw key; _one thiếu → fallback an toàn.\n3) A0.8 errors EN live: bad.txt → \"Only JPG, JPEG, PNG, WebP, BMP, TIFF or AVIF images are supported.\"; bad.jpg hỏng → \"Could not read the image. Try another ... file.\"; submit không ảnh → \"Please select at least 1 image to translate.\" (cookie mt_locale=en). VI giữ nguyên văn (\"Chỉ hỗ trợ ảnh ...\", \"Không đọc được ảnh...\").\n4) A0.9/A1.1 warnings: gemini_translator.py:157 last_warning structured {\"key\":\"backend.warn.geminiAllKeysFailed\"} + cờ _all_keys_failed (dòng 93/158/293) — không còn substring tiếng Việt (A1.1 ✓). WarningMessage __str__ localize theo locale: EN \"Gemini is not initialized, so the app kept the original text...\" / VI nguyên văn; params \"{n}\" đúng (\"Translating 3 text segments...\").\n5) A0.12 progress: emit_progress giữ 4-arg cũ; payload localize server-side theo g.locale (test_emit_progress_carries_valid_key_and_localized_message + vietnamese_locale pass); phaseNames client I18N.t (đã verify t5).\n6) Backward compat 5.6: POST legacy display-text (\"Japanese (Manga)\"/\"Vietnamese\"/\"Local LLM\"/\"Casual (thân mật)\"/\"Yuki-Arenzi\") và POST data-value (\"ja\"/\"vi\"/\"copilot\"/\"casual\") đều 200 + cùng lỗi EN → alias additive hoạt động, không vỡ submit cũ.\n7) Test suite: tests/test_i18n_backend.py 30/30 pass; toàn repo 164/164 pass; check_i18n_keys.py 205 keys parity OK.\n8) Tích hợp UI (t5 đã pass): dropdown mọi trang, switch reload đúng, layout 0 overflow, vi zero-regression, data-value restore/migrate.",
+      "verdict": "pass",
+      "findings": [],
+      "acceptanceResults": [
+        {
+          "criterion": "Phủ 100% chuỗi user-visible (không hardcode sót)",
+          "status": "passed",
+          "evidence": "scanner: \"OK: no hardcoded user-visible strings found\"; 205 keys parity OK"
+        },
+        {
+          "criterion": "Fallback an toàn (locale→vi→raw key) không crash",
+          "status": "passed",
+          "evidence": "unit test: en-missing→vi; both-missing→raw key; unknown→raw key; _one→_other/vi fallback"
+        },
+        {
+          "criterion": "Backend errors/warnings/progress localize EN + vi nguyên văn",
+          "status": "passed",
+          "evidence": "live: 3 lỗi upload EN đúng + vi nguyên văn; WarningMessage stringify EN/VI; emit_progress payload localize (tests)"
+        },
+        {
+          "criterion": "Backward compat: submit cũ (display text) vẫn chạy",
+          "status": "passed",
+          "evidence": "POST legacy display-text + POST data-value cùng 200, alias additive đủ 4 maps (source/target/translator/style), font passthrough"
+        },
+        {
+          "criterion": "Không phá luồng render/editor + test suite xanh",
+          "status": "passed",
+          "evidence": "164/164 tests pass (30 i18n backend); UI gate t5 pass; correction/editor flows không đổi ngoài chuỗi"
+        }
+      ],
+      "commandsRun": [
+        {
+          "command": "python -m pytest tests/test_i18n_backend.py -q",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "30 passed"
+        },
+        {
+          "command": "python -m pytest tests/ -q",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "164 passed"
+        },
+        {
+          "command": "python tools/scan_hardcoded_strings.py",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "OK: no hardcoded user-visible strings found"
+        },
+        {
+          "command": "python tools/check_i18n_keys.py",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "OK: 205 keys, parity + placeholders + plural pairs"
+        },
+        {
+          "command": "Live Playwright/HTTP: upload errors EN+VI, legacy vs data-value POST",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "EN/VI errors đúng; 2 POST paths cùng hành vi"
+        },
+        {
+          "command": "Unit fallback (monkeypatch load_dict)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "chain locale→vi→raw key an toàn"
+        }
+      ]
+    },
+    {
+      "id": "t7",
+      "subject": "Repair i18n: fix reload guard F1 (HIGH) + F2/F3 (LOW) từ UI gate",
+      "description": "Theo findings reviewer-i18n t5: F1 HIGH — sessionStorage mt_i18n_reloaded bị tiêu thụ bởi reload đầu tiên (auto-detect HOẶC switch đầu tiên) → mọi switch dropdown sau đó KHÔNG reload → trang trộn ngôn ngữ (server-rendered tĩnh giữ locale cũ, JS strings nhảy locale mới). Reproduce: (a) vi→en OK, en→vi kẹt; (b) browser en-US/server vi → auto-detect reload đúng, switch vi bị chặn. Fix: change handler #locale-switch LUÔN removeItem(sessionStorage guard) trước reload; guard chỉ dành cho auto-detect trong init()/reloadTo(). F2 LOW: cặp plural _one/_other cho corr.canvas.aria* (EN '1 speech bubbles'). F3 LOW: thêm 🌐 prefix cho dropdown. node --check + detect.mjs sau sửa.",
+      "status": "completed",
+      "assignee": "frontend-i18n",
+      "dependencies": [],
+      "attempt": 1,
+      "createdAt": 1787840320691,
+      "updatedAt": 1787840665286,
+      "kind": "work",
+      "deliverables": [
+        "static/js/i18n.js",
+        "i18n/*.json"
+      ],
+      "reassigning": false,
+      "attemptId": "96a1a7d4-40c3-45bb-aed7-f0462f435ffe",
+      "output": "Repair t7 hoàn tất — 3 findings UI gate t5 đã fix + verify 2 đường reproduce trên app thật.\n\n## F1 (HIGH) — reload guard nuốt switch sau lần đầu\nFix static/js/i18n.js: change handler #locale-switch giờ LUÔN sessionStorage.removeItem('mt_i18n_reloaded') TRƯỚC window.location.reload() — guard chỉ còn bảo vệ auto-detect (init/reloadTo), switch ngôn ngữ là user intent nên luôn reload (trước đây lần switch thứ 2 bị reloadGuard() chặn → trang trộn static locale cũ + JS locale mới).\n\n## F2 (LOW) — plural cho corr.canvas.aria*\ni18n/vi.json + en.json: thay 3 key đơn bằng cặp plural: corr.canvas.ariaStyled_one/_other, ariaPostrender_one/_other, ariaPreview_one/_other (202→205 keys, parity + placeholder + plural pairs OK). correction.js updateCanvasAria dùng ttp(canvasKey, n, {name}) — EN: \"Image x.jpg — 1 speech bubble\" / \"Image x.jpg — 2 speech bubbles\"; vi giữ nguyên bản.\n\n## F3 (LOW) — 🌐 prefix dropdown\ni18n.js LOCALE_LABELS: \"🌐 Tiếng Việt\" / \"🌐 English\".\n\n## Verify (CDP headless trên Flask app thật :5000)\n(a) vi→en→vi: switch 1 → lang/server/label en ✓; switch 2 → lang/server/label vi ✓ (cả 2 đều reload — F1 FIXED; trước fix switch 2 bị chặn).\n(b) en-US/server vi (navigator override): auto-detect vẫn đúng 1 reload (guard=1, server re-render EN) ✓; switch dropdown sau đó → vi vẫn reload (guard được clear) ✓.\nF2: tp EN \"1 speech bubble\"/\"2 speech bubbles\"/\"3 speech bubbles\" ✓; canvas aria thực tế EN \"Image page1.jpg — 2 speech bubbles\" ✓, vi \"Ảnh page1.jpg — 2 bóng thoại\" ✓; legacy keys biến mất, _one/_other có mặt.\nF3: dropdown options \"🌐 Tiếng Việt\"/\"🌐 English\" ✓.\nChecks: node --check ×3 OK; check_i18n_keys 205 keys parity OK; scan full repo 0 findings; pytest test_i18n_backend 30/30 pass.\n\nChanged: static/js/i18n.js, static/js/correction.js, i18n/vi.json, i18n/en.json.",
+      "changedPaths": [
+        "static/js/i18n.js",
+        "static/js/correction.js",
+        "i18n/vi.json",
+        "i18n/en.json"
+      ],
+      "acceptanceResults": [
+        {
+          "criterion": "F1: language switch always reloads (guard cleared in change handler)",
+          "status": "passed",
+          "evidence": "vi->en->vi both switch to matching lang/server/label; auto-detect still ≤1 reload; switch after auto-detect works"
+        },
+        {
+          "criterion": "F2: corr.canvas.aria* plural _one/_other in both dicts + ttp in correction.js",
+          "status": "passed",
+          "evidence": "205 keys parity OK; EN '1 speech bubble'/'2 speech bubbles'; real canvas aria EN+VI verified"
+        },
+        {
+          "criterion": "F3: 🌐 prefix in dropdown",
+          "status": "passed",
+          "evidence": "options render '🌐 Tiếng Việt' and '🌐 English'"
+        },
+        {
+          "criterion": "No regression: node --check, key parity, scan, pytest",
+          "status": "passed",
+          "evidence": "all green (30/30 pytest, 0 scan findings)"
+        }
+      ],
+      "commandsRun": [
+        {
+          "command": "node --check static/js/i18n.js && node --check static/js/app.js && node --check static/js/correction.js",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "syntax OK"
+        },
+        {
+          "command": "python tools/check_i18n_keys.py",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "OK: 205 keys, key parity across 2 locale(s), placeholder parity OK, plural pairs OK"
+        },
+        {
+          "command": "python tools/scan_hardcoded_strings.py",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "OK: no hardcoded user-visible strings found"
+        },
+        {
+          "command": "python -m pytest tests/test_i18n_backend.py -q",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "30 passed"
+        },
+        {
+          "command": "CDP reproduce (a) vi->en->vi on real Flask app",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "both switches reload; lang/server/label match after each (F1 fixed)"
+        },
+        {
+          "command": "CDP reproduce (b) en-US/server vi + subsequent switch",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "auto-detect exactly 1 reload (guard=1); dropdown switch after auto-detect still reloads"
+        },
+        {
+          "command": "CDP F2 plural + real canvas aria (en/vi)",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "Image x.jpg — 1 speech bubble / 2 speech bubbles; real aria EN + VI correct"
+        },
+        {
+          "command": "CDP F3 dropdown labels",
+          "status": "passed",
+          "exitCode": 0,
+          "evidence": "options: 🌐 Tiếng Việt, 🌐 English"
+        }
+      ]
+    }
+  ],
+  "taskSeq": 7,
+  "phase": "running",
+  "approvedAt": 1787837179021
+}

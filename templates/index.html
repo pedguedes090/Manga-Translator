@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ current_locale }}">
 
 <head>
    <meta charset="UTF-8">
@@ -10,6 +10,8 @@
    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
    <link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,100..900;1,100..900&display=swap"
       rel="stylesheet">
+   <script id="i18n-data" type="application/json">{{ i18n_json | safe }}</script>
+   <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
 </head>
 
 <body>
@@ -17,7 +19,9 @@
    </header>
    <div class="container">
       <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Manga Translator">
-      {% if error %}
+      {% if error_key %}
+      <div class="form-error">{{ t(error_key, **(error_params or {})) }}</div>
+      {% elif error %}
       <div class="form-error">{{ error }}</div>
       {% endif %}
       <form action="/translate" method="post" enctype="multipart/form-data" onsubmit="return updateHiddenInputs()">
@@ -26,82 +30,82 @@
          <div class="form-grid">
             <!-- Row 1: Source & Target Language -->
             <div class="select-wrapper">
-               <label class="translator-label">Ngôn ngữ gốc</label>
+               <label class="translator-label">{{ t('index.label.sourceLang') }}</label>
                <div class="custom-select" id="source_lang" tabindex="0">
                   <div class="select-box">
                      <span class="selected"></span>
                      <span class="icon">&#9660;</span>
                   </div>
                   <div class="options">
-                     <span class="option">Japanese (Manga)</span>
-                     <span class="option">Chinese (Manhua)</span>
-                     <span class="option">Korean (Manhwa)</span>
-                     <span class="option">English (Comic)</span>
+                     <span class="option" data-value="ja">Japanese (Manga)</span>
+                     <span class="option" data-value="zh">Chinese (Manhua)</span>
+                     <span class="option" data-value="ko">Korean (Manhwa)</span>
+                     <span class="option" data-value="en">English (Comic)</span>
                   </div>
                </div>
             </div>
 
             <div class="select-wrapper">
-               <label class="translator-label">Dịch sang</label>
+               <label class="translator-label">{{ t('index.label.targetLang') }}</label>
                <div class="custom-select" id="language" tabindex="0">
                   <div class="select-box">
                      <span class="selected"></span>
                      <span class="icon">&#9660;</span>
                   </div>
                   <div class="options">
-                     <span class="option">Vietnamese</span>
-                     <span class="option">English</span>
-                     <span class="option">Chinese</span>
-                     <span class="option">Korean</span>
-                     <span class="option">Thai</span>
-                     <span class="option">Indonesian</span>
-                     <span class="option">French</span>
-                     <span class="option">German</span>
-                     <span class="option">Spanish</span>
-                     <span class="option">Russian</span>
+                     <span class="option" data-value="vi">Vietnamese</span>
+                     <span class="option" data-value="en">English</span>
+                     <span class="option" data-value="zh">Chinese</span>
+                     <span class="option" data-value="ko">Korean</span>
+                     <span class="option" data-value="th">Thai</span>
+                     <span class="option" data-value="id">Indonesian</span>
+                     <span class="option" data-value="fr">French</span>
+                     <span class="option" data-value="de">German</span>
+                     <span class="option" data-value="es">Spanish</span>
+                     <span class="option" data-value="ru">Russian</span>
                   </div>
                </div>
             </div>
 
             <!-- Row 2: Translator & Style -->
             <div class="select-wrapper">
-               <label class="translator-label">Translator</label>
+               <label class="translator-label">{{ t('index.label.translator') }}</label>
                <div class="custom-select" id="translator" tabindex="0">
                   <div class="select-box">
                      <span class="selected"></span>
                      <span class="icon">&#9660;</span>
                   </div>
                   <div class="options">
-                     <span class="option">Gemini</span>
-                     <span class="option">Local LLM</span>
-                     <span class="option">Google</span>
+                     <span class="option" data-value="gemini">Gemini</span>
+                     <span class="option" data-value="copilot">Local LLM</span>
+                     <span class="option" data-value="google">Google</span>
                   </div>
                </div>
             </div>
 
             <div class="select-wrapper">
-               <label class="translator-label">Phong cách dịch</label>
+               <label class="translator-label">{{ t('index.label.style') }}</label>
                <div class="custom-select" id="style" tabindex="0">
                   <div class="select-box">
                      <span class="selected"></span>
                      <span class="icon">&#9660;</span>
                   </div>
                   <div class="options">
-                     <span class="option">Default</span>
-                     <span class="option">Casual (thân mật)</span>
-                     <span class="option">Formal (trang trọng)</span>
-                     <span class="option">Keep Honorifics (-san, senpai...)</span>
-                     <span class="option">Web Novel Style</span>
-                     <span class="option">Action (ngắn gọn)</span>
-                     <span class="option">Literal (sát nghĩa)</span>
-                     <span class="option">Custom...</span>
+                     <span class="option" data-value="default">{{ t('index.option.styleDefault') }}</span>
+                     <span class="option" data-value="casual">{{ t('index.option.styleCasual') }}</span>
+                     <span class="option" data-value="formal">{{ t('index.option.styleFormal') }}</span>
+                     <span class="option" data-value="keep_honorifics">{{ t('index.option.styleKeepHonorifics') }}</span>
+                     <span class="option" data-value="web_novel">{{ t('index.option.styleWebNovel') }}</span>
+                     <span class="option" data-value="action">{{ t('index.option.styleAction') }}</span>
+                     <span class="option" data-value="literal">{{ t('index.option.styleLiteral') }}</span>
+                     <span class="option" data-value="custom">{{ t('index.option.styleCustom') }}</span>
                   </div>
                </div>
             </div>
 
             <!-- Row 3: Font -->
             <div class="select-wrapper">
-               <label class="translator-label">Font</label>
+               <label class="translator-label">{{ t('index.label.font') }}</label>
                <div class="custom-select" id="font" tabindex="0">
                   <div class="select-box">
                      <span class="selected"></span>
@@ -137,39 +141,39 @@
             </div>
             <!-- Row 4: Manual Correction Toggle -->
             <div class="select-wrapper" style="display: flex; align-items: center; gap: 12px; flex-direction: row;">
-               <label class="translator-label" style="margin-bottom: 0; white-space: nowrap;">Chỉnh sửa thủ công</label>
+               <label class="translator-label" style="margin-bottom: 0; white-space: nowrap;">{{ t('index.label.manualCorrection') }}</label>
                <label class="toggle-switch">
                   <input type="checkbox" id="manual_correction" name="manual_correction" value="on">
                   <span class="toggle-slider"></span>
                </label>
-               <small style="color: #888; font-size: 11px;">Dừng sau OCR để thêm/xoá bóng thoại</small>
+               <small style="color: #888; font-size: 11px;">{{ t('index.hint.manualCorrection') }}</small>
             </div>
          </div>
 
          <!-- Custom Prompt (show when Custom selected) -->
          <div class="select-wrapper full-width" id="custom-prompt-wrapper" style="display: none;">
-            <label class="translator-label">Custom Prompt</label>
+            <label class="translator-label">{{ t('index.label.customPrompt') }}</label>
             <textarea id="custom_prompt" name="custom_prompt"
-               placeholder="Ví dụ: Dịch theo phong cách light novel, giữ nguyên tên nhân vật..." rows="2"></textarea>
+               placeholder="{{ t('index.placeholder.customPrompt') }}" rows="2"></textarea>
          </div>
 
          <!-- Local LLM Settings (show when Local LLM selected) -->
          <div id="copilot-settings" style="display: none; width: 100%;">
             <div class="form-grid">
                <div class="select-wrapper">
-                  <label class="translator-label">Server URL</label>
+                  <label class="translator-label">{{ t('index.label.serverUrl') }}</label>
                   <input type="text" id="copilot_server" name="copilot_server" value="http://localhost:8080"
                      placeholder="http://localhost:11434 (Ollama)" class="text-input">
                   <small style="color: #888; font-size: 11px; margin-top: 4px; display: block;">
-                     Ollama: 11434 | LM Studio: 1234 | LocalAI: 8080
+                     {{ t('index.hint.serverPorts') }}
                   </small>
                </div>
                <div class="select-wrapper">
-                  <label class="translator-label">Model Name</label>
+                  <label class="translator-label">{{ t('index.label.modelName') }}</label>
                   <input type="text" id="copilot_model_input" name="copilot_model_input" value="gpt-4.1"
                      placeholder="llama3.2, qwen2.5, mistral..." class="text-input">
                   <small style="color: #888; font-size: 11px; margin-top: 4px; display: block;">
-                     Nhập tên model đang chạy trên server
+                     {{ t('index.hint.copilotModel') }}
                   </small>
                </div>
             </div>
@@ -179,21 +183,21 @@
          <div id="gemini-settings" style="display: block; width: 100%;">
             <div class="form-grid">
                <div class="select-wrapper full-width">
-                  <label class="translator-label" for="gemini_model_input">Model Name</label>
+                  <label class="translator-label" for="gemini_model_input">{{ t('index.label.modelName') }}</label>
                   <input type="text" id="gemini_model_input" name="gemini_model_input"
                      value="gemini-3.1-flash-lite" placeholder="gemini-3.1-flash-lite" class="text-input"
                      autocomplete="off" spellcheck="false">
                   <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">
-                     Nhập tên model Gemini muốn dùng cho bản dịch.
+                     {{ t('index.hint.geminiModel') }}
                   </small>
                </div>
                <div class="select-wrapper full-width">
-                  <label class="translator-label" for="gemini_api_key">Gemini API Keys</label>
+                  <label class="translator-label" for="gemini_api_key">{{ t('index.label.geminiApiKeys') }}</label>
                   <textarea id="gemini_api_key" name="gemini_api_key"
-                     placeholder="Dán mỗi API key một dòng. App sẽ tự đổi sang key tiếp theo khi key trước lỗi quota/auth."
+                     placeholder="{{ t('index.placeholder.geminiKeys') }}"
                      rows="3" class="text-area"></textarea>
                   <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">
-                     🔒 Keys được lưu trong trình duyệt của bạn (localStorage), có thể phân tách bằng xuống dòng, dấu phẩy hoặc dấu chấm phẩy.
+                     {{ t('index.hint.geminiKeysStorage') }}
                   </small>
                </div>
             </div>
@@ -203,7 +207,7 @@
          <input id="file-upload" type="file" name="files"
             accept=".jpg, .jpeg, .png, .webp, .bmp, .tif, .tiff, .avif" multiple required>
          <label for="file-upload" class="file" id="file-label">
-            <span id="file-text">📁 Chọn ảnh</span>
+            <span id="file-text">{{ t('index.fileLabel.choose') }}</span>
          </label>
          <div id="file-list" class="file-list"></div>
 
@@ -212,7 +216,7 @@
          <input type="hidden" id="selected_translator" name="selected_translator">
          <input type="hidden" id="selected_style" name="selected_style">
          <input type="hidden" id="selected_font" name="selected_font">
-         <button type="submit">Translate</button>
+         <button type="submit">{{ t('index.submit') }}</button>
       </form>
 
       <!-- Progress Bar -->
@@ -227,7 +231,7 @@
       </div>
 
       <img id="loading-img" src="{{ url_for('static', filename='img/loading.gif') }}" alt="">
-      <p id="loading-p">Đang xử lý... Vui lòng đợi!</p>
+      <p id="loading-p">{{ t('index.loading') }}</p>
    </div>
 
    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
@@ -241,18 +245,28 @@
          const progressPhase = document.getElementById('progress-phase');
 
          const phaseNames = {
-            'ocr': '📖 OCR nhận dạng text',
-            'translation': '🌐 Dịch văn bản',
-            'rendering': '✏️ Render text vào ảnh',
-            'done': '✅ Hoàn tất'
+            'ocr': I18N.t('index.phase.ocr'),
+            'translation': I18N.t('index.phase.translation'),
+            'rendering': I18N.t('index.phase.rendering'),
+            'done': I18N.t('index.phase.done')
          };
+         if (I18N.onRefresh) {
+            I18N.onRefresh(function () {
+               phaseNames.ocr = I18N.t('index.phase.ocr');
+               phaseNames.translation = I18N.t('index.phase.translation');
+               phaseNames.rendering = I18N.t('index.phase.rendering');
+               phaseNames.done = I18N.t('index.phase.done');
+            });
+         }
 
          socket.on('progress', function (data) {
             progressContainer.style.display = 'block';
             const phaseName = phaseNames[data.phase] || data.phase;
             progressPhase.textContent = phaseName;
             progressBar.style.width = data.percent + '%';
-            progressText.textContent = data.message;
+            // i18n: key/params ride along (additive) so the client can re-render
+            // per locale; legacy payloads still carry the plain message.
+            progressText.textContent = data.key ? I18N.t(data.key, data.params || {}) : data.message;
             if (data.phase === 'done') {
                progressBar.style.background = 'linear-gradient(90deg, #50C878, #2ecc71)';
             }
@@ -262,8 +276,8 @@
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
             progressBar.style.background = 'linear-gradient(90deg, #5E1675, #8e44ad)';
-            progressText.textContent = 'Khởi tạo...';
-            progressPhase.textContent = '⏳ Chuẩn bị';
+            progressText.textContent = I18N.t('index.phase.init');
+            progressPhase.textContent = I18N.t('index.phase.preparing');
          });
       });
    </script>

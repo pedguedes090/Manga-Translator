@@ -1,47 +1,49 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="{{ current_locale }}">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Chỉnh sửa thủ công - Manga Translator</title>
+<title>{{ t('corr.pageTitle') }}</title>
 <link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/correction.css') }}">
+<script id="i18n-data" type="application/json">{{ i18n_json | safe }}</script>
+<script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
 </head>
 <body>
 
 <div class="corr-topbar">
-  <a href="/" class="corr-logo">← Quay lại</a>
-  <span class="corr-title">{% if mode == "postrender" %}✏️ Chỉnh sửa sau dịch{% elif mode == "styleditor" %}🎨 Chỉnh sửa & Style{% else %}✏️ Chỉnh sửa bóng thoại{% endif %}</span>
-  <span class="corr-stats"><span id="total-blocks">{{ total_blocks }}</span> bóng thoại · {% if mode == "styleditor" %}{{ all_images|length }} ảnh{% else %}{{ images|length }} ảnh{% endif %}</span>
+  <a href="/" class="corr-logo">{{ t('common.back') }}</a>
+  <span class="corr-title">{% if mode == "postrender" %}{{ t('corr.title.postrender') }}{% elif mode == "styleditor" %}{{ t('corr.title.styleditor') }}{% else %}{{ t('corr.title.preview') }}{% endif %}</span>
+  <span class="corr-stats"><span id="total-blocks">{{ tp('corr.stats.bubbles', total_blocks) }}</span> · {% if mode == "styleditor" %}{{ tp('corr.stats.images', all_images|length) }}{% else %}{{ tp('corr.stats.images', images|length) }}{% endif %}</span>
 </div>
 
 <div class="corr-toolbar">
-  <div class="tool-group" role="group" aria-label="Công cụ">
-    <button class="tool-btn active" id="tool-select" aria-pressed="true">🖱️ Chọn</button>
-    {% if mode != "postrender" and mode != "styleditor" %}<button class="tool-btn" id="tool-add" aria-pressed="false">＋ Thêm</button>{% endif %}
-    <button class="tool-btn" id="tool-delete" aria-pressed="false">🗑️ Xoá</button>
+  <div class="tool-group" role="group" aria-label="{{ t('corr.toolbar.toolsAria') }}">
+    <button class="tool-btn active" id="tool-select" aria-pressed="true">{{ t('corr.tool.select') }}</button>
+    {% if mode != "postrender" and mode != "styleditor" %}<button class="tool-btn" id="tool-add" aria-pressed="false">{{ t('corr.tool.add') }}</button>{% endif %}
+    <button class="tool-btn" id="tool-delete" aria-pressed="false">{{ t('corr.tool.delete') }}</button>
     {% if mode == "styleditor" %}
-    <button class="tool-btn" id="tool-erase-rect" aria-pressed="false" title="Xoá vùng hình chữ nhật (phím E)">▭ Rect</button>
-    <button class="tool-btn" id="tool-erase-brush" aria-pressed="false" title="Cọ xoá nền (phím E)">🖌 Cọ</button>
-    <label class="brush-size-label" for="brush-size">Cỡ cọ</label>
-    <select id="brush-size" class="brush-size" aria-label="Cỡ cọ xoá nền">
+    <button class="tool-btn" id="tool-erase-rect" aria-pressed="false" title="{{ t('corr.tool.eraseRectTitle') }}">{{ t('corr.tool.rect') }}</button>
+    <button class="tool-btn" id="tool-erase-brush" aria-pressed="false" title="{{ t('corr.tool.eraseBrushTitle') }}">{{ t('corr.tool.brush') }}</button>
+    <label class="brush-size-label" for="brush-size">{{ t('corr.tool.brushSize') }}</label>
+    <select id="brush-size" class="brush-size" aria-label="{{ t('corr.tool.brushSizeAria') }}">
       <option value="4">4px</option>
       <option value="12" selected>12px</option>
       <option value="24">24px</option>
     </select>
     {% endif %}
-    <button class="tool-btn" id="tool-undo" aria-pressed="false">↩ Undo</button>
-    <button class="tool-btn" id="tool-redo" aria-pressed="false">↪ Redo</button>
-    {% if mode != "postrender" and mode != "styleditor" %}<button class="tool-btn" id="tool-reset" aria-pressed="false">↺ Reset</button>{% endif %}
+    <button class="tool-btn" id="tool-undo" aria-pressed="false">{{ t('corr.tool.undo') }}</button>
+    <button class="tool-btn" id="tool-redo" aria-pressed="false">{{ t('corr.tool.redo') }}</button>
+    {% if mode != "postrender" and mode != "styleditor" %}<button class="tool-btn" id="tool-reset" aria-pressed="false">{{ t('corr.tool.reset') }}</button>{% endif %}
   </div>
-  <div class="zoom-group" aria-label="Điều khiển zoom">
-    <button class="zoom-btn" id="zoom-out" title="Thu nhỏ (-)">−</button>
-    <span class="zoom-label" id="zoom-label">Fit</span>
-    <button class="zoom-btn" id="zoom-in" title="Phóng to (+)">＋</button>
-    <button class="zoom-btn" id="zoom-fit" title="Vừa màn hình">Fit</button>
-    <button class="zoom-btn" id="zoom-actual" title="Kích thước thật">100%</button>
+  <div class="zoom-group" aria-label="{{ t('corr.zoom.aria') }}">
+    <button class="zoom-btn" id="zoom-out" title="{{ t('corr.zoom.outTitle') }}">−</button>
+    <span class="zoom-label" id="zoom-label">{{ t('corr.zoom.fit') }}</span>
+    <button class="zoom-btn" id="zoom-in" title="{{ t('corr.zoom.inTitle') }}">＋</button>
+    <button class="zoom-btn" id="zoom-fit" title="{{ t('corr.zoom.fitTitle') }}">{{ t('corr.zoom.fit') }}</button>
+    <button class="zoom-btn" id="zoom-actual" title="{{ t('corr.zoom.actualTitle') }}">100%</button>
   </div>
-  <span class="shortcuts" id="shortcuts-hint"><kbd>S</kbd> Chọn <kbd>A</kbd> Thêm <kbd>D</kbd> Xoá <kbd>Ctrl+Wheel</kbd> Zoom <kbd>Space</kbd> Kéo ảnh <kbd>←→</kbd> Ảnh</span>
+  <span class="shortcuts" id="shortcuts-hint">{{ t('corr.shortcuts.preview_html') | safe }}</span>
 </div>
 
 <div class="corr-hints" id="corr-hints" role="status" aria-live="polite"></div>
@@ -51,20 +53,20 @@
     <div id="image-thumbnails">
       {% if mode == "styleditor" %}
       {% for ai in all_images %}
-      <div class="thumb-item {% if ai.idx == (postrender_image_idx | default(0)) %}active{% endif %}" data-index="{{ ai.idx }}" role="button" tabindex="0" aria-label="Chuyển đến ảnh {{ ai.name }}">
+      <div class="thumb-item {% if ai.idx == (postrender_image_idx | default(0)) %}active{% endif %}" data-index="{{ ai.idx }}" role="button" tabindex="0" aria-label="{{ t('corr.thumb.goToAria', name=ai.name) }}">
         <canvas class="thumb-canvas" id="thumb-{{ ai.idx }}"></canvas>
         <span class="thumb-name">{{ ai.name }}</span>
         <span class="thumb-count"></span>
-        <span class="thumb-badge">chưa render</span>
+        <span class="thumb-badge">{{ t('corr.thumb.notRendered') }}</span>
       </div>
       {% endfor %}
       {% else %}
       {% for img in images %}
-      <div class="thumb-item {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}" role="button" tabindex="0" aria-label="Chuyển đến ảnh {{ img.name }}">
+      <div class="thumb-item {% if loop.first %}active{% endif %}" data-index="{{ loop.index0 }}" role="button" tabindex="0" aria-label="{{ t('corr.thumb.goToAria', name=img.name) }}">
         <canvas class="thumb-canvas" id="thumb-{{ loop.index0 }}"></canvas>
         <span class="thumb-name">{{ img.name }}</span>
-        <span class="thumb-count">{{ img.blocks|length }} blocks</span>
-        <span class="thumb-badge">chưa lưu</span>
+        <span class="thumb-count">{{ tp('corr.thumb.blocks', img.blocks|length) }}</span>
+        <span class="thumb-badge">{{ t('corr.thumb.notSaved') }}</span>
       </div>
       {% endfor %}
       {% endif %}
@@ -72,24 +74,24 @@
   </div>
 
   <div class="corr-canvas-wrap">
-    <button id="btn-toggle-editor" class="editor-toggle" aria-expanded="false" aria-controls="block-editor">📐 Thuộc tính</button>
+    <button id="btn-toggle-editor" class="editor-toggle" aria-expanded="false" aria-controls="block-editor">{{ t('corr.editor.toggle') }}</button>
     <div class="canvas-outer">
-      <canvas id="main-canvas" role="img" aria-label="Ảnh chỉnh sửa"></canvas>
+      <canvas id="main-canvas" role="img" aria-label="{{ t('corr.canvas.aria') }}"></canvas>
     </div>
     <div class="canvas-nav">
-      <button id="btn-prev" class="nav-btn">← Trước</button>
+      <button id="btn-prev" class="nav-btn">{{ t('corr.nav.prev') }}</button>
       <span id="current-image-label"></span>
-      <button id="btn-next" class="nav-btn">Sau →</button>
+      <button id="btn-next" class="nav-btn">{{ t('corr.nav.next') }}</button>
     </div>
   </div>
 
   <div class="corr-editor" id="block-editor">
     <div class="editor-head">
-      <h3>Thuộc tính</h3>
-      <button id="btn-close-editor" class="editor-close" aria-label="Đóng bảng thuộc tính">✕</button>
+      <h3>{{ t('corr.editor.title') }}</h3>
+      <button id="btn-close-editor" class="editor-close" aria-label="{{ t('corr.editor.closeAria') }}">✕</button>
     </div>
     <div id="block-properties">
-      <p class="no-sel">Chọn bóng thoại để chỉnh sửa</p>
+      <p class="no-sel">{{ t('corr.editor.noSelection') }}</p>
     </div>
     <div class="ocr-status" id="ocr-status"></div>
   </div>
@@ -97,17 +99,17 @@
 
 <div class="corr-footer">
   {% if mode == "postrender" %}
-  <a href="/translate-result/{{ session_id }}" class="btn-outline" id="btn-cancel">↩ Về kết quả</a>
-  <button id="btn-rerender-one" class="btn-primary">🔄 Re-render ảnh này</button>
-  <button id="btn-save-all" class="btn-primary">✅ Lưu tất cả & Về kết quả</button>
+  <a href="/translate-result/{{ session_id }}" class="btn-outline" id="btn-cancel">{{ t('corr.footer.backToResults') }}</a>
+  <button id="btn-rerender-one" class="btn-primary">{{ t('corr.footer.rerenderOne') }}</button>
+  <button id="btn-save-all" class="btn-primary">{{ t('corr.footer.saveAllBack') }}</button>
   {% elif mode == "styleditor" %}
-  <a href="/correction/{{ session_id }}" class="btn-outline" id="btn-back-correction">✏️ Quay lại chỉnh OCR</a>
-  <a href="/translate-result/{{ session_id }}" class="btn-outline" id="btn-cancel">↩ Về kết quả</a>
-  <button id="btn-rerender-one" class="btn-primary">🔄 Render ảnh này</button>
-  <button id="btn-save-all" class="btn-primary">✅ Lưu tất cả & Xem kết quả</button>
+  <a href="/correction/{{ session_id }}" class="btn-outline" id="btn-back-correction">{{ t('corr.footer.backToOcr') }}</a>
+  <a href="/translate-result/{{ session_id }}" class="btn-outline" id="btn-cancel">{{ t('corr.footer.backToResults') }}</a>
+  <button id="btn-rerender-one" class="btn-primary">{{ t('corr.footer.renderOne') }}</button>
+  <button id="btn-save-all" class="btn-primary">{{ t('corr.footer.saveAllView') }}</button>
   {% else %}
-  <a href="/" class="btn-outline">Huỷ</a>
-  <button id="btn-continue" class="btn-primary">✅ Tiếp tục dịch & Render</button>
+  <a href="/" class="btn-outline">{{ t('corr.footer.cancel') }}</a>
+  <button id="btn-continue" class="btn-primary">{{ t('corr.footer.continue') }}</button>
   {% endif %}
 </div>
 

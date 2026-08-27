@@ -1,13 +1,15 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ current_locale }}">
 
 <head>
    <meta charset="UTF-8">
    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-   <title>Manga Translator - Results</title>
+   <title>{{ t('results.pageTitle') }}</title>
    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
    <link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,100..900;1,100..900&display=swap"
       rel="stylesheet">
+   <script id="i18n-data" type="application/json">{{ i18n_json | safe }}</script>
+   <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
 </head>
 
 <!-- JSZip library for client-side ZIP creation (much faster than server-side) -->
@@ -18,12 +20,12 @@
    </header>
 
    <div class="results-container">
-      <h2 class="results-title">✨ Kết quả dịch ({{ images|length }} ảnh)</h2>
+      <h2 class="results-title">{{ t('results.title', n=images|length) }}</h2>
       {% if correction_session_id %}
-      <p class="edit-note">Ảnh đã chỉnh sửa sau render sẽ tự cập nhật tại đây.</p>
+      <p class="edit-note">{{ t('results.editNote') }}</p>
       {% endif %}
       {% if warning %}
-      <div class="result-warning">{{ warning }}</div>
+      <div class="result-warning">{% if warning is mapping %}{{ t(warning.key, **(warning.params or {})) }}{% else %}{{ warning }}{% endif %}</div>
       {% endif %}
 
       {% if images %}
@@ -31,9 +33,9 @@
          {% for img in images %}
          <div class="image-card">
             {% if img.original_data %}
-            <div class="compare-tabs" aria-label="So sánh ảnh {{ img.name }}">
-               <button type="button" class="compare-tab active" data-target="translated">Đã dịch</button>
-               <button type="button" class="compare-tab" data-target="original">Gốc</button>
+            <div class="compare-tabs" aria-label="{{ t('results.compareAria', name=img.name) }}">
+               <button type="button" class="compare-tab active" data-target="translated">{{ t('results.tab.translated') }}</button>
+               <button type="button" class="compare-tab" data-target="original">{{ t('results.tab.original') }}</button>
             </div>
             {% endif %}
             <img class="gallery-image"
@@ -45,27 +47,27 @@
                <span class="image-name">{{ img.name }}</span>
                {% if correction_session_id %}
                <a href="/postrender/{{ correction_session_id }}?img={{ loop.index0 }}" class="edit-btn">
-                  ✏️ Chỉnh sửa
+                  {{ t('results.edit') }}
                </a>
                {% endif %}
                <a href="#" class="download-btn" data-image="{{ img.data }}" data-name="{{ img.name }}">
-                  💾 Download
+                  {{ t('results.download') }}
                </a>
             </div>
          </div>
          {% endfor %}
       </div>
       {% else %}
-      <p class="no-images">Không có ảnh nào được xử lý.</p>
+      <p class="no-images">{{ t('results.noImages') }}</p>
       {% endif %}
    </div>
 
    <div class="buttons_image">
-      <a href="#" class="green" id="download-zip">📦 Download ZIP</a>
+      <a href="#" class="green" id="download-zip">{{ t('results.downloadZip') }}</a>
       {% if correction_session_id %}
-      <a href="/correction/{{ correction_session_id }}" class="purple-link">✏️ Quay lại chỉnh OCR</a>
+      <a href="/correction/{{ correction_session_id }}" class="purple-link">{{ t('results.backToOcr') }}</a>
       {% endif %}
-      <a href="/" class="red">← Quay lại</a>
+      <a href="/" class="red">{{ t('common.back') }}</a>
    </div>
 
 </body>
@@ -125,7 +127,7 @@
 
       const btn = e.target;
       const originalText = btn.textContent;
-      btn.textContent = '⏳ Đang tạo ZIP...';
+      btn.textContent = I18N.t('results.zipping');
       btn.style.pointerEvents = 'none';
 
       try {
@@ -157,7 +159,7 @@
          a.click();
          URL.revokeObjectURL(url);
 
-         btn.textContent = '✅ Đã tải xong!';
+         btn.textContent = I18N.t('results.zipDone');
          setTimeout(() => {
             btn.textContent = originalText;
             btn.style.pointerEvents = 'auto';
@@ -165,7 +167,7 @@
 
       } catch (error) {
          console.error('ZIP creation failed:', error);
-         btn.textContent = '❌ Lỗi tạo ZIP';
+         btn.textContent = I18N.t('results.zipError');
          setTimeout(() => {
             btn.textContent = originalText;
             btn.style.pointerEvents = 'auto';

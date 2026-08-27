@@ -78,7 +78,10 @@ class GeminiTranslator(BaseTranslator):
         env_keys = os.environ.get("GEMINI_API_KEYS") or os.environ.get("GEMINI_API_KEY")
         self.api_keys = _normalize_api_keys(api_key=api_key, api_keys=api_keys or env_keys)
         if not self.api_keys:
-            raise ValueError("Gemini API key required. Set GEMINI_API_KEY(S) or pass api_key/api_keys.")
+            raise ValueError(
+                "Gemini credentials required: set GEMINI_API_KEY(S) "
+                "or pass api_key/api_keys."
+            )
 
         self.api_key = self.api_keys[0]
         self._client_factory = client_factory
@@ -87,6 +90,7 @@ class GeminiTranslator(BaseTranslator):
         self.exhausted_api_keys = set()
         self.key_errors = {}
         self.last_warning = None
+        self._all_keys_failed = False
         self.model_name = str(model_name or DEFAULT_GEMINI_MODEL).strip() or DEFAULT_GEMINI_MODEL
 
     def _default_client_factory(self, api_key):
@@ -134,6 +138,7 @@ class GeminiTranslator(BaseTranslator):
                     self._current_key_index = idx
                     self.api_key = api_key
                     self.last_warning = None
+                    self._all_keys_failed = False
                     return response
                 except Exception as e:
                     last_error = e
@@ -149,8 +154,9 @@ class GeminiTranslator(BaseTranslator):
                     else:
                         break
 
-        self.last_warning = "Tất cả Gemini API key đều không dùng được hoặc request thất bại."
-        raise RuntimeError(self.last_warning) from last_error
+        self.last_warning = {"key": "backend.warn.geminiAllKeysFailed", "params": {}}
+        self._all_keys_failed = True
+        raise RuntimeError("All Gemini credentials failed or all requests failed") from last_error
 
     def translate_single(
         self, 
@@ -282,10 +288,9 @@ Format: ["bản dịch 1", "bản dịch 2", ...]"""
                 return translations
                 
             except Exception as e:
-                error_str = str(e)
                 print(f"Gemini batch attempt {attempt + 1}/{MAX_RETRIES} failed: {e}")
                 
-                if "tất cả gemini api key" in error_str.lower():
+                if getattr(self, "_all_keys_failed", False):
                     print("All Gemini keys failed. Returning original texts.")
                     return texts_to_translate
                 

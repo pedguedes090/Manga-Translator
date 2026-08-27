@@ -14,7 +14,7 @@
       "reasoningEffort": "max",
       "executionPrompt": "Đóng vai Agency product-sprint-prioritizer. Đọc docs/manual-mode-v2-spec.md, app.py, add_text.py, templates, static/js/correction.js để hiểu nền móng V2. Chốt đặc tả Manual Mode V3 tại docs/manual-mode-v3-spec.md: luồng correction -> editor ảnh đã xoá text; công cụ xoá; text dịch editable; panel style (font/màu/cỡ/đậm/nghiêng/căn lề); API contract (style save, font list, erase); 44+ acceptance P0/P1/P2. Giữ nhận diện #5E1675/Exo 2/tiếng Việt. Gửi tóm tắt cho cả team.",
       "joinedAt": 1787826063772,
-      "status": "idle"
+      "status": "removed"
     },
     {
       "id": "3a339234-b87f-4b15-a658-e449a467e1d0",
@@ -25,7 +25,7 @@
       "reasoningEffort": "max",
       "executionPrompt": "Đóng vai Agency frontend-developer, BẮT BUỘC dùng skill impeccable (mode Operate; context.mjs một lần; craft-floor trước khi sửa; ≤2 vòng visual QA desktop+mobile). Triển khai trang editor V3: nền canvas = ảnh đã xoá text (nhận từ backend), công cụ xoá brush/rect, text dịch editable trên ảnh (drag/resize/nudge — tái dùng engine correction.js), panel style per-block, undo/redo, loading/error, a11y, responsive, touch ≥44px. Chỉ sửa static/js, static/css, templates.",
       "joinedAt": 1787826063788,
-      "status": "idle"
+      "status": "removed"
     },
     {
       "id": "d5c02656-0814-40ce-add2-59845c66bde7",
@@ -36,7 +36,7 @@
       "reasoningEffort": "max",
       "executionPrompt": "Đóng vai Agency backend-architect + API platform engineer. Chạy GitNexus impact trước khi sửa symbol. Mở rộng V2: lưu style per-block (font,size,color,bold,italic,align) vào render_plan; render_all_blocks nhận style; GET /fonts từ thư mục fonts/; API xoá thêm vùng (erase_regions mở rộng, KHÔNG co lại, idempotent từ ảnh gốc, không gọi OCR/translator); tương thích ngược V2. Thêm pytest (validation, style render, erase accumulate, double-submit, legacy).",
       "joinedAt": 1787826063802,
-      "status": "idle"
+      "status": "removed"
     },
     {
       "id": "7b5098dc-d09c-4297-a98d-7e01904d50f3",
@@ -47,7 +47,7 @@
       "reasoningEffort": "max",
       "executionPrompt": "Đóng vai Agency codebase-onboarding engineer. Xây checklist verification V3 sớm: node --check, py_compile, pytest targeted + full, E2E correction -> continue -> editor xoá text -> style -> re-render, kiểm chứng acceptance P0, không gọi lại OCR/dịch, regression V2. Chỉ chạy khi frontend+backend báo hoàn tất. Gửi bằng chứng cho reviewer/captain.",
       "joinedAt": 1787826063820,
-      "status": "idle"
+      "status": "removed"
     },
     {
       "id": "c32c86d9-49e6-4811-aec1-c1bb8aed0e53",
@@ -58,7 +58,7 @@
       "reasoningEffort": "max",
       "executionPrompt": "Đóng vai Agency senior-developer kiêm Impeccable UX reviewer. Cổng UI/UX gate bằng critique+audit (screenshot desktop+mobile, touch emulation, ≤2 vòng) rồi review tích hợp cuối: canvas state machine, style rendering correctness, erase safety, undo snapshots, XSS/validation, session, performance, backward compat. Findings có severity + requiredFix. Chỉ pass khi P0/P1 đạt.",
       "joinedAt": 1787826063834,
-      "status": "idle"
+      "status": "removed"
     }
   ],
   "tasks": [

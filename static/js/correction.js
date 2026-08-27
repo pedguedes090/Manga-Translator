@@ -102,6 +102,10 @@
     const shortcutsHint = document.getElementById('shortcuts-hint');
     const toastEl = document.getElementById('toast');
 
+    // ---- i18n helpers (spec i18n-v1) ----
+    const tt = (key, params) => (window.I18N && I18N.t) ? I18N.t(key, params) : key;
+    const ttp = (base, n, params) => (window.I18N && I18N.tp) ? I18N.tp(base, n, params) : (base + '_other');
+
     const imageCache = {};
     const thumbnailKeys = {};
 
@@ -113,10 +117,7 @@
         const reset = document.getElementById('tool-reset');
         if (reset) reset.style.display = 'none';
         if (shortcutsHint) {
-            shortcutsHint.innerHTML =
-                '<kbd>S</kbd> Chọn <kbd>D</kbd> Xoá <kbd>E</kbd> Xoá nền <kbd>B</kbd>/<kbd>I</kbd> Đậm/Nghiêng ' +
-                '<kbd>L</kbd>/<kbd>C</kbd>/<kbd>R</kbd> Căn lề <kbd>[</kbd>/<kbd>]</kbd> Chọn bóng thoại ' +
-                '<kbd>Ctrl+Z</kbd> Undo <kbd>Ctrl+Wheel</kbd> Zoom';
+            shortcutsHint.innerHTML = tt('corr.shortcuts.styleditor_html');
         }
     } else if (isPostrender) {
         document.body.classList.add('mode-postrender');
@@ -127,9 +128,7 @@
         const nav = document.querySelector('.canvas-nav');
         if (nav) nav.style.display = 'none';
         if (shortcutsHint) {
-            shortcutsHint.innerHTML =
-                '<kbd>S</kbd> Chọn <kbd>D</kbd> Xoá <kbd>Ctrl+Z</kbd> Undo ' +
-                '<kbd>Ctrl+Shift+Z</kbd> Redo <kbd>Ctrl+Wheel</kbd> Zoom <kbd>Space</kbd> Kéo';
+            shortcutsHint.innerHTML = tt('corr.shortcuts.postrender_html');
         }
     }
 
@@ -219,14 +218,14 @@
         if (isBusy || undoStack.length === 0) return;
         redoStack.push(snapshot());
         restoreSnapshot(undoStack.pop());
-        showToast('Đã hoàn tác ↩');
+        showToast(tt('corr.toast.undone'));
     }
 
     function redo() {
         if (isBusy || redoStack.length === 0) return;
         undoStack.push(snapshot());
         restoreSnapshot(redoStack.pop());
-        showToast('Đã làm lại ↪');
+        showToast(tt('corr.toast.redone'));
     }
 
     function loadImage(idx) {
@@ -771,7 +770,7 @@
         const block = getCurrentBlocks()[idx];
         if (!block || !block.bbox || isOcrPending || isPostrender) return;
         isOcrPending = true;
-        ocrStatus.innerHTML = '⏳ Đang OCR...';
+        ocrStatus.innerHTML = tt('corr.ocr.running');
         ocrStatus.style.display = 'block';
 
         const form = new FormData();
@@ -794,12 +793,12 @@
                     updateBlockEditor(idx);
                     requestDraw();
                     requestThumbnails();
-                    ocrStatus.innerHTML = '✅ ' + cleaned.substring(0, 30);
+                    ocrStatus.innerHTML = tt('corr.ocr.done', { text: cleaned.substring(0, 30) });
                 } else {
-                    ocrStatus.innerHTML = '⚠️ Không nhận được text';
+                    ocrStatus.innerHTML = tt('corr.ocr.noText');
                 }
             })
-            .catch(() => { ocrStatus.innerHTML = '❌ Lỗi OCR'; })
+            .catch(() => { ocrStatus.innerHTML = tt('corr.ocr.error'); })
             .finally(() => {
                 isOcrPending = false;
                 setTimeout(() => { ocrStatus.style.display = 'none'; }, 3000);
@@ -983,7 +982,7 @@
                 redrawEraseLayer();
             } else {
                 // A4.9 (P1): tiny rects never add an erase region.
-                showToast('Vùng xoá quá nhỏ (tối thiểu 4×4 px)', { variant: 'error', duration: 2500 });
+                showToast(tt('corr.toast.eraseTooSmall'), { variant: 'error', duration: 2500 });
             }
             isDrawing = false; drawStart = null; drawEnd = null;
         }
@@ -1254,10 +1253,10 @@
         }
         requestDraw(); updateThumbnails(); updateFooterButtons();
 
-        showToast('🗑️ Đã xoá bóng thoại', {
+        showToast(tt('corr.toast.deleted'), {
             variant: 'undo',
             duration: 4000,
-            actionLabel: 'Hoàn tác',
+            actionLabel: tt('corr.toast.undoAction'),
             onAction: function () { undo(); }
         });
     }
@@ -1282,17 +1281,17 @@
         if (!hintsBar) return;
         let msg = '';
         if (currentTool === 'erase-rect') {
-            msg = '▭ Kéo trên ảnh để xoá vùng hình chữ nhật (text gốc/SFX còn sót) · vùng nhỏ hơn 4×4px bị bỏ qua · ↩ Undo chỉ khôi phục hiển thị, vùng xoá vẫn render sạch · Esc để thoát';
+            msg = tt('corr.hint.eraseRect');
         } else if (currentTool === 'erase-brush') {
-            msg = '🖌 Vẽ tự do để xoá text gốc/SFX còn sót · Cỡ cọ ' + brushSize + 'px (đổi ở toolbar) · ↩ Undo chỉ khôi phục hiển thị, vùng xoá vẫn render sạch · Esc để thoát';
+            msg = tt('corr.hint.eraseBrush', { size: brushSize });
         } else if (currentTool === 'delete') {
             msg = isPostrender
-                ? '🖱️ Nhấp vào bóng thoại để xoá (vùng đó sẽ được xoá nền, không render chữ) · kéo lướt qua sẽ không xoá · Esc để thoát'
-                : '🖱️ Nhấp vào bóng thoại để xoá (text gốc sẽ giữ nguyên trên ảnh kết quả) · kéo lướt qua sẽ không xoá · Esc để thoát';
+                ? tt('corr.hint.deletePostrender')
+                : tt('corr.hint.deletePreview');
         } else if (currentTool === 'select' && selectedBlockIdx >= 0) {
-            msg = '⌨️ Dùng ←→↑↓ để di chuyển 1px · Giữ Shift = 10px · Kéo cạnh/góc để resize';
+            msg = tt('corr.hint.move');
         } else if (currentTool === 'add') {
-            msg = '✏️ Kéo trên ảnh để vẽ bóng thoại mới · Esc để huỷ';
+            msg = tt('corr.hint.add');
         }
         hintsBar.classList.toggle('show', !!msg);
         hintsBar.textContent = msg;
@@ -1372,7 +1371,7 @@
     function rerenderCurrentImage(opts) {
         const o = opts || {};
         const navigateAfter = !!o.navigateAfter;
-        const busyLabel = o.busyLabel || '⏳ Đang render…';
+        const busyLabel = o.busyLabel || tt('corr.toast.rendering');
         if (isBusy) return;
         const img = images[currentImageIdx];
         if (!img) return;
@@ -1441,18 +1440,18 @@
                         window.location.href = '/translate-result/' + sessionId;
                         return;
                     }
-                    showToast('✅ Đã render lại ảnh', { variant: 'success', duration: 2500 });
+                    showToast(tt('corr.toast.rendered'), { variant: 'success', duration: 2500 });
                 })
                 .catch(err => {
                     if (err.status === 404) {
-                        showToast('Phiên đã hết hạn', { variant: 'error', duration: 3000 });
+                        showToast(tt('corr.toast.sessionExpired'), { variant: 'error', duration: 3000 });
                         setTimeout(() => { window.location.href = '/'; }, 2000);
                     } else if (err.status === 422) {
-                        showToast('Toạ độ bbox không hợp lệ', { variant: 'error', duration: 3000 });
+                        showToast(tt('corr.toast.bboxInvalid'), { variant: 'error', duration: 3000 });
                         document.querySelectorAll('.coord-input').forEach(inp => inp.classList.add('error'));
                         setTimeout(() => document.querySelectorAll('.coord-input').forEach(inp => inp.classList.remove('error')), 3000);
                     } else {
-                        showToast('Không thể render lại ảnh', { variant: 'error', duration: 5000, actionLabel: 'Thử lại', onAction: run });
+                        showToast(tt('corr.toast.renderFailed'), { variant: 'error', duration: 5000, actionLabel: tt('corr.toast.retryAction'), onAction: run });
                     }
                 })
                 .finally(() => {
@@ -1472,7 +1471,7 @@
         if (isStyleditor) { saveAllStyleditor(); return; }
         const img = images[currentImageIdx];
         if (img && img.dirty) {
-            const label = '⏳ Đang render…';
+            const label = tt('corr.toast.rendering');
             showToast(label, { variant: 'info', duration: 6000 });
             rerenderCurrentImage({ navigateAfter: true, busyLabel: label });
         } else {
@@ -1562,7 +1561,7 @@
                 return;
             }
             const p = payloads[i];
-            const label = '⏳ Đang render ảnh ' + (i + 1) + '/' + payloads.length;
+            const label = tt('corr.toast.renderingCount', { i: i + 1, n: payloads.length });
             setBusy(true, label);
             showToast(label, { variant: 'info', duration: 6000 });
             const form = new FormData();
@@ -1597,13 +1596,13 @@
                 .catch(err => {
                     setBusy(false);
                     if (err.status === 404) {
-                        showToast('Phiên đã hết hạn', { variant: 'error', duration: 3000 });
+                        showToast(tt('corr.toast.sessionExpired'), { variant: 'error', duration: 3000 });
                         setTimeout(() => { window.location.href = '/'; }, 2000);
                     } else if (err.status === 422) {
-                        showToast('Toạ độ bbox không hợp lệ ở ảnh ' + (p.idx + 1), { variant: 'error', duration: 4000 });
+                        showToast(tt('corr.toast.bboxInvalidAt', { n: p.idx + 1 }), { variant: 'error', duration: 4000 });
                     } else {
-                        showToast('Không thể render ảnh ' + (p.idx + 1) + '/' + payloads.length, {
-                            variant: 'error', duration: 6000, actionLabel: 'Thử lại',
+                        showToast(tt('corr.toast.renderFailedCount', { i: p.idx + 1, n: payloads.length }), {
+                            variant: 'error', duration: 6000, actionLabel: tt('corr.toast.retryAction'),
                             onAction: runNext
                         });
                     }
@@ -1639,7 +1638,7 @@
     document.getElementById('zoom-actual').addEventListener('click', setActualSize);
     const toolReset = document.getElementById('tool-reset');
     if (toolReset) toolReset.addEventListener('click', () => {
-        if (confirm('Reset tất cả bóng thoại về kết quả OCR gốc?')) {
+        if (confirm(tt('corr.confirm.reset'))) {
             undoStack = []; redoStack = [];
             images.forEach((img) => {
                 img.blocks = img._originalBlocks ? img._originalBlocks.map(b => ({
@@ -1648,7 +1647,7 @@
                 img.deletedRegions = [];
             });
             selectedBlockIdx = -1; updateBlockEditor(-1); requestDraw(); updateThumbnails();
-            showToast('Đã reset về OCR gốc');
+            showToast(tt('corr.toast.resetDone'));
         }
     });
 
@@ -1665,7 +1664,7 @@
     const btnContinue = document.getElementById('btn-continue');
     if (btnContinue) btnContinue.addEventListener('click', () => {
         btnContinue.disabled = true;
-        btnContinue.textContent = '⏳ Đang chuẩn bị…';
+        btnContinue.textContent = tt('corr.toast.preparing');
         const allBlocks = images.map((img, idx) => ({ image_idx: idx, blocks: img.blocks }));
         modifiedBlocksInput.value = JSON.stringify(allBlocks);
         document.getElementById('continue-form').submit();
@@ -1742,11 +1741,13 @@
         if (!img) return;
         const n = (img.blocks || []).length;
         const dirty = (isPostrender || isStyleditor) && img.dirty;
-        const label = isStyleditor ? 'Ảnh đã xoá text và vẽ chữ dịch ' : (isPostrender ? 'Ảnh đã dịch ' : 'Ảnh ');
+        const canvasKey = isStyleditor ? 'corr.canvas.ariaStyled' : (isPostrender ? 'corr.canvas.ariaPostrender' : 'corr.canvas.ariaPreview');
         mainCanvas.setAttribute('role', 'img');
+        // F2 (UI gate): canvas aria uses the plural pair (_one/_other) so EN
+        // reads "1 speech bubble" / "N speech bubbles"; ttp injects {n}.
         mainCanvas.setAttribute('aria-label',
-            label + (img.name || '') +
-            ' — ' + n + ' bóng thoại' + (dirty ? ', có thay đổi chưa render' : ''));
+            ttp(canvasKey, n, { name: img.name || '' }) +
+            (dirty ? tt('corr.canvas.ariaDirty') : ''));
     }
 
     // ---- Thumbnails ----
@@ -1763,7 +1764,7 @@
             const idx = parseInt(el.dataset.index);
             const img = images[idx];
             const countEl = el.querySelector('.thumb-count');
-            if (countEl) countEl.textContent = img ? (img.blocks.length + ' blocks') : '—';
+            if (countEl) countEl.textContent = img ? ttp('corr.thumb.blocks', img.blocks.length) : '—';
             // F4: dirty badge on thumbs with un-rendered changes (P0 current
             // image; P1 whole session via localStorage — spec 2.2).
             if (isStyleditor) {
@@ -1775,7 +1776,7 @@
             }
             renderThumbnail(idx);
         });
-        document.getElementById('total-blocks').textContent = images.reduce((s, i) => s + i.blocks.length, 0);
+        document.getElementById('total-blocks').textContent = ttp('corr.stats.bubbles', images.reduce((s, i) => s + i.blocks.length, 0));
         updateCanvasAria();
     }
 
@@ -1891,7 +1892,7 @@
             } catch (err) {
                 fontFailures[family] = true;
                 delete fontLoads[family];
-                showToast('⚠️ Không tải được font ' + family, { variant: 'error', duration: 4000 });
+                showToast(tt('corr.toast.fontLoadFailed', { name: family }), { variant: 'error', duration: 4000 });
                 resolve();
                 return;
             }
@@ -1902,7 +1903,7 @@
             }).catch(() => {
                 fontFailures[family] = true;
                 delete fontLoads[family];
-                showToast('⚠️ Không tải được font ' + family + ' — dùng font mặc định', { variant: 'error', duration: 4000 });
+                showToast(tt('corr.toast.fontFallback', { name: family }), { variant: 'error', duration: 4000 });
                 resolve();
             });
         });
@@ -1920,7 +1921,7 @@
                     ? images[0].blocks[0].style.font : DEFAULT_STYLE.font;
                 fontList = [{ name: cur, label: cur }];
                 populateFontOptions();
-                showToast('⚠️ Không tải được danh sách phông chữ', { variant: 'error', duration: 4000 });
+                showToast(tt('corr.toast.fontListFailed'), { variant: 'error', duration: 4000 });
             });
     }
     function populateFontOptions() {
@@ -2334,35 +2335,35 @@
         const style = normalizeStyle(block.style);
         const auto = !style.font_size;
         return '<div class="prop-group style-group" id="style-group">' +
-            '<p class="style-group-head">Kiểu chữ</p>' +
-            '<label for="style-font">Phông chữ</label>' +
-            '<select id="style-font" class="style-font" aria-label="Phông chữ">' +
+            '<p class="style-group-head">' + tt('corr.style.heading') + '</p>' +
+            '<label for="style-font">' + tt('corr.style.font') + '</label>' +
+            '<select id="style-font" class="style-font" aria-label="' + tt('corr.style.fontAria') + '">' +
                 fontList.map(f => '<option value="' + escapeHtml(String(f.name || '')) + '">' + escapeHtml(String(f.label || f.name || '')) + '</option>').join('') +
             '</select>' +
             '<div class="style-size-row">' +
-                '<label for="style-size">Cỡ chữ</label>' +
-                '<input type="number" id="style-size" class="style-size" min="8" max="120" step="1" value="' + (style.font_size || '') + '" ' + (auto ? 'disabled' : '') + ' aria-label="Cỡ chữ tính bằng px">' +
-                '<label class="style-auto"><input type="checkbox" id="style-size-auto" ' + (auto ? 'checked' : '') + '> Tự động</label>' +
+                '<label for="style-size">' + tt('corr.style.size') + '</label>' +
+                '<input type="number" id="style-size" class="style-size" min="8" max="120" step="1" value="' + (style.font_size || '') + '" ' + (auto ? 'disabled' : '') + ' aria-label="' + tt('corr.style.sizeAria') + '">' +
+                '<label class="style-auto"><input type="checkbox" id="style-size-auto" ' + (auto ? 'checked' : '') + '> ' + tt('corr.style.auto') + '</label>' +
             '</div>' +
-            '<p class="style-size-warn" id="style-size-warn">⚠️ Cỡ chữ sẽ được thu nhỏ cho vừa khung</p>' +
+            '<p class="style-size-warn" id="style-size-warn">' + tt('corr.style.sizeWarn') + '</p>' +
             '<div class="style-color-row">' +
-                '<span class="style-color-label" id="style-color-label">Màu chữ</span>' +
-                '<div class="style-swatches" id="style-swatches" role="group" aria-label="Màu chữ mẫu">' +
-                    '<button type="button" class="swatch swatch-auto' + (!style.text_color ? ' swatch-active' : '') + '" data-color="" title="Tự động: đen/trắng theo nền" aria-label="Màu tự động">A</button>' +
-                    STYLE_SWATCHES.map(c => '<button type="button" class="swatch' + (style.text_color === c ? ' swatch-active' : '') + '" data-color="' + c + '" style="background:' + c + '" title="' + c + '" aria-label="Màu ' + c + '"></button>').join('') +
+                '<span class="style-color-label" id="style-color-label">' + tt('corr.style.color') + '</span>' +
+                '<div class="style-swatches" id="style-swatches" role="group" aria-label="' + tt('corr.style.colorSwatchesAria') + '">' +
+                    '<button type="button" class="swatch swatch-auto' + (!style.text_color ? ' swatch-active' : '') + '" data-color="" title="' + tt('corr.style.autoColorTitle') + '" aria-label="' + tt('corr.style.autoColorAria') + '">A</button>' +
+                    STYLE_SWATCHES.map(c => '<button type="button" class="swatch' + (style.text_color === c ? ' swatch-active' : '') + '" data-color="' + c + '" style="background:' + c + '" title="' + c + '" aria-label="' + tt('corr.style.colorAria', { c: c }) + '"></button>').join('') +
                 '</div>' +
-                '<input type="color" id="style-color" class="style-color" value="' + (style.text_color || '#000000') + '" aria-label="Chọn màu chữ tuỳ chỉnh">' +
+                '<input type="color" id="style-color" class="style-color" value="' + (style.text_color || '#000000') + '" aria-label="' + tt('corr.style.customColorAria') + '">' +
             '</div>' +
-            '<div class="style-toggles" role="group" aria-label="Kiểu đậm nghiêng">' +
-                '<button type="button" id="style-bold" class="style-btn" aria-pressed="' + (style.bold ? 'true' : 'false') + '" title="In đậm (phím B)"><b>B</b></button>' +
-                '<button type="button" id="style-italic" class="style-btn" aria-pressed="' + (style.italic ? 'true' : 'false') + '" title="In nghiêng (phím I)"><i>I</i></button>' +
+            '<div class="style-toggles" role="group" aria-label="' + tt('corr.style.boldItalicAria') + '">' +
+                '<button type="button" id="style-bold" class="style-btn" aria-pressed="' + (style.bold ? 'true' : 'false') + '" title="' + tt('corr.style.boldTitle') + '"><b>B</b></button>' +
+                '<button type="button" id="style-italic" class="style-btn" aria-pressed="' + (style.italic ? 'true' : 'false') + '" title="' + tt('corr.style.italicTitle') + '"><i>I</i></button>' +
             '</div>' +
-            '<div class="style-align" role="group" aria-label="Căn lề chữ">' +
-                '<button type="button" id="align-left" class="style-btn align-btn" aria-pressed="' + (style.align === 'left' ? 'true' : 'false') + '" title="Căn trái (phím L)">⬅ Trái</button>' +
-                '<button type="button" id="align-center" class="style-btn align-btn" aria-pressed="' + (style.align === 'center' ? 'true' : 'false') + '" title="Căn giữa (phím C)">↔ Giữa</button>' +
-                '<button type="button" id="align-right" class="style-btn align-btn" aria-pressed="' + (style.align === 'right' ? 'true' : 'false') + '" title="Căn phải (phím R)">➡ Phải</button>' +
+            '<div class="style-align" role="group" aria-label="' + tt('corr.style.alignAria') + '">' +
+                '<button type="button" id="align-left" class="style-btn align-btn" aria-pressed="' + (style.align === 'left' ? 'true' : 'false') + '" title="' + tt('corr.style.alignLeftTitle') + '">' + tt('corr.style.alignLeft') + '</button>' +
+                '<button type="button" id="align-center" class="style-btn align-btn" aria-pressed="' + (style.align === 'center' ? 'true' : 'false') + '" title="' + tt('corr.style.alignCenterTitle') + '">' + tt('corr.style.alignCenter') + '</button>' +
+                '<button type="button" id="align-right" class="style-btn align-btn" aria-pressed="' + (style.align === 'right' ? 'true' : 'false') + '" title="' + tt('corr.style.alignRightTitle') + '">' + tt('corr.style.alignRight') + '</button>' +
             '</div>' +
-            '<button type="button" id="style-apply-all" class="style-apply-all">📋 Áp dụng cho tất cả block ảnh này</button>' +
+            '<button type="button" id="style-apply-all" class="style-apply-all">' + tt('corr.style.applyAll') + '</button>' +
         '</div>';
     }
     function setBlockStyle(patch) {
@@ -2391,7 +2392,7 @@
         requestDraw();
         markDirty(currentImageIdx);
         updateThumbnails();
-        showToast('📋 Đã áp dụng kiểu cho tất cả block ảnh này', { duration: 2500 });
+        showToast(tt('corr.toast.styleAppliedAll'), { duration: 2500 });
     }
     // P1-1 (t5): sync the editor panel's VALUES without rebuilding the DOM —
     // used by coord blur / nudge / drag / resize so keyboard focus survives
@@ -2508,8 +2509,8 @@
     function updateBlockEditor(idx) {
         if (idx < 0) {
             blockProperties.innerHTML = isStyleditor
-                ? '<p class="no-sel">Chọn bóng thoại để chỉnh sửa — bấm <kbd>[</kbd>/<kbd>]</kbd> để chọn</p>'
-                : '<p class="no-sel">Chọn bóng thoại để chỉnh sửa</p>';
+                ? '<p class="no-sel">' + tt('corr.editor.noSelectionStyled_html') + '</p>'
+                : '<p class="no-sel">' + tt('corr.editor.noSelection') + '</p>';
             updateHints();
             return;
         }
@@ -2522,10 +2523,10 @@
         const w = block.bbox ? (block.bbox[2] - block.bbox[0]) : 0;
         const h = block.bbox ? (block.bbox[3] - block.bbox[1]) : 0;
 
-        const textareaLabel = (isPostrender || isStyleditor) ? 'Bản dịch' : 'Nội dung text';
+        const textareaLabel = (isPostrender || isStyleditor) ? tt('corr.editor.translatedLabel') : tt('corr.editor.textLabel');
         const textareaValue = escapeHtml((isPostrender || isStyleditor) ? (block.translated || '') : (block.text || ''));
         const originalLine = (isPostrender || isStyleditor) && block.text
-            ? '<p class="prop-original">Gốc: ' + escapeHtml(block.text.substring(0, 60)) + '</p>' : '';
+            ? '<p class="prop-original">' + tt('corr.editor.original', { text: block.text.substring(0, 60) }) + '</p>' : '';
 
         blockProperties.innerHTML =
             '<div class="prop-group">' +
@@ -2534,7 +2535,7 @@
                 originalLine +
             '</div>' +
             '<div class="prop-group">' +
-                '<label>Vị trí (x1,y1,x2,y2)</label>' +
+                '<label>' + tt('corr.editor.position') + '</label>' +
                 '<div class="prop-coords">' +
                     '<input type="number" id="edit-x1" value="' + (block.bbox ? (block.bbox[0] || 0) : 0) + '" class="coord-input" placeholder="x1" aria-label="x1">' +
                     '<input type="number" id="edit-y1" value="' + (block.bbox ? (block.bbox[1] || 0) : 0) + '" class="coord-input" placeholder="y1" aria-label="y1">' +
@@ -2544,16 +2545,16 @@
             '</div>' +
             '<div class="prop-group prop-meta">' +
                 '<span class="prop-size" id="prop-size">' + w + '×' + h + ' px</span>' +
-                '<div class="prop-nudge" role="group" aria-label="Di chuyển bóng thoại">' +
-                    '<button type="button" class="nudge-btn" data-dx="0" data-dy="-1" title="Lên 1px">▲</button>' +
-                    '<button type="button" class="nudge-btn" data-dx="-1" data-dy="0" title="Trái 1px">◀</button>' +
-                    '<button type="button" class="nudge-btn" data-dx="1" data-dy="0" title="Phải 1px">▶</button>' +
-                    '<button type="button" class="nudge-btn" data-dx="0" data-dy="1" title="Xuống 1px">▼</button>' +
+                '<div class="prop-nudge" role="group" aria-label="' + tt('corr.editor.nudgeAria') + '">' +
+                    '<button type="button" class="nudge-btn" data-dx="0" data-dy="-1" title="' + tt('corr.editor.nudgeUp') + '">▲</button>' +
+                    '<button type="button" class="nudge-btn" data-dx="-1" data-dy="0" title="' + tt('corr.editor.nudgeLeft') + '">◀</button>' +
+                    '<button type="button" class="nudge-btn" data-dx="1" data-dy="0" title="' + tt('corr.editor.nudgeRight') + '">▶</button>' +
+                    '<button type="button" class="nudge-btn" data-dx="0" data-dy="1" title="' + tt('corr.editor.nudgeDown') + '">▼</button>' +
                 '</div>' +
             '</div>' +
             (isStyleditor ? styleGroupHtml(block) : '') +
             '<div class="prop-actions">' +
-                '<button id="btn-delete-block" class="btn-delete">🗑️ Xoá bóng thoại</button>' +
+                '<button id="btn-delete-block" class="btn-delete">' + tt('corr.editor.delete') + '</button>' +
             '</div>';
 
         document.getElementById('edit-text').addEventListener('focus', function () {
@@ -2604,7 +2605,7 @@
                     inp.classList.remove('error');
                 } else {
                     inp.classList.add('error');
-                    showToast('Bbox không hợp lệ (x2 phải > x1, y2 > y1)', { variant: 'error', duration: 3000 });
+                    showToast(tt('corr.toast.bboxInvalidRule'), { variant: 'error', duration: 3000 });
                 }
                 // P1-1 (t5): light refresh WITHOUT rebuilding the panel — the
                 // focused input survives, so Tab keeps moving through the
@@ -2696,7 +2697,15 @@
             redrawEraseLayer();
             initFonts();
             // F1.5/A10.3: translator failure still opens the editor — warn once.
-            if (DATA.warning) showToast('⚠️ ' + DATA.warning, { duration: 6000 });
+            if (DATA.warning) {
+                // P1: structured warning {key, params} renders via the dict;
+                // P0: plain string keeps the ⚠️ prefix.
+                const w = DATA.warning;
+                const msg = (w && typeof w === 'object' && w.key)
+                    ? tt(w.key, w.params || {})
+                    : tt('corr.toast.warningPrefix', { message: String(w) });
+                showToast(msg, { duration: 6000 });
+            }
         }
         fitCanvas({ resetZoom: true });
         requestDraw();
@@ -2715,4 +2724,24 @@
     window.addEventListener('beforeunload', () => {
         if (isStyleditor) saveDraftState();
     });
+
+    // P1 (A1.3): live-switch hooks — re-render JS-driven strings on
+    // i18n:changed without touching business logic.
+    if (window.I18N && I18N.onRefresh) {
+        I18N.onRefresh(function () {
+            if (shortcutsHint) {
+                shortcutsHint.innerHTML = tt(isStyleditor
+                    ? 'corr.shortcuts.styleditor_html'
+                    : (isPostrender ? 'corr.shortcuts.postrender_html' : 'corr.shortcuts.preview_html'));
+            }
+            updateHints();
+            updateThumbnails();
+            updateCanvasAria();
+            if (selectedBlockIdx >= 0) {
+                updateBlockEditor(selectedBlockIdx);
+            } else if (isStyleditor) {
+                updateBlockEditor(-1);
+            }
+        });
+    }
 })();

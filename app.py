@@ -48,9 +48,15 @@ import threading
 import math
 
 
+from i18n import WarningMessage, register_app, t, tp
+
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "secret_key")
 app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("MAX_UPLOAD_MB", "50")) * 1024 * 1024
+
+# i18n: per-request locale (cookie mt_locale > Accept-Language) + context
+# processor injecting t/tp/current_locale/i18n_json into every template.
+register_app(app)
 
 
 def get_async_mode():
@@ -86,7 +92,7 @@ MAX_MEMORY_SESSIONS = 20
 SESSION_TTL_SECONDS = int(os.environ.get("SESSION_TTL_SECONDS", 6 * 3600))
 BBOX_EXPAND_RATIO = 0.03
 ALLOWED_IMAGE_EXTENSIONS = {"jpg", "jpeg", "png", "webp", "bmp", "tif", "tiff", "avif"}
-SUPPORTED_IMAGE_FORMATS_LABEL = "JPG, JPEG, PNG, WebP, BMP, TIFF hoặc AVIF"
+# Formats label is localized via i18n key 'backend.formats' (spec §4.5).
 DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite"
 
 _UUID_RE = re.compile(
@@ -355,13 +361,24 @@ def normalize_block_style(raw, default_font):
     }
 
 
-def emit_progress(phase, current, total, message):
+def emit_progress(phase, current, total, message=None, key=None, params=None):
+    """Emit a Socket.IO progress event (i18n spec §5.8).
+
+    Legacy callers may pass the message directly. When the `key` argument is
+    given the message is localized server-side via t(key, **params) for the
+    current request locale, and the raw key + params ride along in the payload
+    so clients can re-render per locale.
+    """
+    if message is None and key is not None:
+        message = t(key, **(params or {}))
     try:
         socketio.emit('progress', {
             'phase': phase,
             'current': current,
             'total': total,
             'message': message,
+            'key': key,
+            'params': params,
             'percent': int((current / max(total, 1)) * 100)
         })
     except Exception:
@@ -850,17 +867,15 @@ def translate_texts_all(all_texts, translator_obj, translator_type,
         (translated_texts, warning) — warning is None when translation
         succeeded without a fallback.
     """
-    emit_progress('translation', 0, 1, f'Đang dịch {len(all_texts)} đoạn text...')
+    emit_progress('translation', 0, 1, key='backend.progress.translating',
+                   params={'n': len(all_texts)})
     print(f"\n[Phase 2] Translating {len(all_texts)} text segments...")
 
     if translator_type == "gemini":
         gemini_translator = getattr(translator_obj, '_gemini_translator', None)
         if gemini_translator is None:
             print("Gemini translator is not initialized; keeping original texts")
-            translator_obj.last_warning = (
-                "Gemini chưa được khởi tạo nên app giữ nguyên text gốc. "
-                "Hãy kiểm tra API key rồi thử lại."
-            )
+            translator_obj.last_warning = WarningMessage(key='backend.warn.geminiNotInit')
             translated_texts = all_texts
         else:
             try:
@@ -874,10 +889,7 @@ def translate_texts_all(all_texts, translator_obj, translator_type,
                     ]
                 except Exception as e2:
                     print(f"Gemini single translation also failed: {e2}")
-                    translator_obj.last_warning = (
-                        "Gemini không dịch được nên app giữ nguyên text gốc. "
-                        "Hãy kiểm tra API key/quota rồi thử lại."
-                    )
+                    translator_obj.last_warning = WarningMessage(key='backend.warn.geminiFailed')
                     translated_texts = all_texts
 
     elif translator_type == "copilot":
@@ -892,15 +904,12 @@ def translate_texts_all(all_texts, translator_obj, translator_type,
             translated_texts = translator_obj._local_llm_tr.translate_batch(all_texts, source_lang, target_lang)
         except Exception as e:
             print(f"Local LLM batch failed: {e}, falling back to single translations")
-            emit_progress('translation', 0, 1, f'Batch failed, falling back to single translations...')
+            emit_progress('translation', 0, 1, key='backend.progress.batchFallback')
             try:
                 translated_texts = [translator_obj._local_llm_tr.translate_single(t, source_lang, target_lang) for t in all_texts]
             except Exception as e2:
                 print(f"Local LLM single translation also failed: {e2}")
-                translator_obj.last_warning = (
-                    "Local LLM không dịch được nên app giữ nguyên text gốc. "
-                    "Hãy kiểm tra server URL/model rồi thử lại."
-                )
+                translator_obj.last_warning = WarningMessage(key='backend.warn.localLlmFailed')
                 translated_texts = all_texts
 
     elif translator_type == "google":
@@ -908,17 +917,17 @@ def translate_texts_all(all_texts, translator_obj, translator_type,
             translated_texts = translator_obj.translate_batch_google(all_texts)
         except Exception as e:
             print(f"Google batch translation failed: {e}")
-            translator_obj.last_warning = "Google Translate lỗi nên app giữ nguyên text gốc."
+            translator_obj.last_warning = WarningMessage(key='backend.warn.googleFailed')
             translated_texts = all_texts
 
     else:
         print(f"WARNING: Unrecognized translator type '{translator_type}', no translation performed")
-        emit_progress('translation', 0, 1, f'Cảnh báo: Translator không xác định, text không được dịch')
-        translator_obj.last_warning = "Translator không xác định nên app giữ nguyên text gốc."
+        emit_progress('translation', 0, 1, key='backend.progress.unknownTranslator')
+        translator_obj.last_warning = WarningMessage(key='backend.warn.unknownTranslator')
         translated_texts = all_texts
 
     print("OK Translation completed")
-    emit_progress('translation', 1, 1, 'Dịch hoàn tất')
+    emit_progress('translation', 1, 1, key='backend.progress.translated')
     return translated_texts, getattr(translator_obj, "last_warning", None)
 
 def translate_and_render(all_ocr_results, translator_obj, selected_font, translator_type,
@@ -941,7 +950,7 @@ def translate_and_render(all_ocr_results, translator_obj, selected_font, transla
     
     if not all_texts:
         print("No text to translate.")
-        emit_progress('done', total_images, total_images, 'Không có text để dịch')
+        emit_progress('done', total_images, total_images, key='backend.progress.noText')
         results = [{'name': name, 'image': image} for name, image, _ in all_ocr_results]
         if collect_render_plan:
             empty_plan = [
@@ -958,7 +967,7 @@ def translate_and_render(all_ocr_results, translator_obj, selected_font, transla
     )
 
     # Phase 3: Render
-    emit_progress('rendering', 0, total_images, 'Đang render text vào ảnh...')
+    emit_progress('rendering', 0, total_images, key='backend.progress.rendering')
     print(f"\n[Phase 3] Rendering translated text...")
 
     font_path = get_font_path(selected_font)
@@ -972,7 +981,8 @@ def translate_and_render(all_ocr_results, translator_obj, selected_font, transla
     # because PIL ImageDraw operations hold the GIL, and the progress_lock +
     # emit_progress calls serialize most of the parallel work anyway.
     for idx, (name, image, blocks) in enumerate(all_ocr_results):
-        emit_progress('rendering', idx + 1, total_images, f'Render: {name}')
+        emit_progress('rendering', idx + 1, total_images,
+                      key='backend.progress.renderImage', params={'name': name})
 
         # Build per-image render candidates (same filtering as before)
         candidates = []
@@ -1016,7 +1026,9 @@ def translate_and_render(all_ocr_results, translator_obj, selected_font, transla
     print("OK Rendering completed")
     if skipped_count > 0:
         print(f"  Skipped {skipped_count} OCR artifact block(s)")
-    emit_progress('done', total_images, total_images, f'Hoàn tất! {total_images} ảnh')
+    emit_progress('done', total_images, total_images,
+                  tp('backend.progress.done', total_images),
+                  key='backend.progress.done', params={'n': total_images})
 
     if collect_render_plan:
         return processed_results, render_plan
@@ -1032,9 +1044,14 @@ def home():
 def upload_file():
     manual_correction = request.form.get("manual_correction", "").strip() == "on"
     
+    # Additive aliases so clients sending data-value codes keep working
+    # (i18n spec §5.6); legacy display-text keys stay valid.
     translator_map = {
         "Local LLM": "copilot",
-        "Copilot": "copilot"
+        "Copilot": "copilot",
+        "gemini": "gemini",
+        "google": "google",
+        "copilot": "copilot"
     }
     selected_translator_raw = request.form["selected_translator"]
     selected_translator = translator_map.get(selected_translator_raw, selected_translator_raw.lower())
@@ -1044,9 +1061,17 @@ def upload_file():
     gemini_model = request.form.get("gemini_model_input", DEFAULT_GEMINI_MODEL).strip()
     gemini_api_keys = parse_gemini_api_keys(request.form.get("gemini_api_key", ""))
     if selected_translator == "gemini" and not gemini_api_keys:
-        return render_template("index.html", error="Vui lòng nhập ít nhất 1 Gemini API Key.")
+        return render_template(
+            "index.html",
+            error=t('backend.error.noApiKey'),
+            error_key='backend.error.noApiKey', error_params={},
+        )
     if selected_translator == "gemini" and not gemini_model:
-        return render_template("index.html", error="Vui lòng nhập tên model Gemini.")
+        return render_template(
+            "index.html",
+            error=t('backend.error.noModel'),
+            error_key='backend.error.noModel', error_params={},
+        )
     
     selected_font_raw = request.form["selected_font"]
     selected_font = selected_font_raw.lower()
@@ -1061,7 +1086,9 @@ def upload_file():
         "japanese (manga)": "ja",
         "chinese (manhua)": "zh",
         "korean (manhwa)": "ko",
-        "english (comic)": "en"
+        "english (comic)": "en",
+        # data-value aliases (i18n spec §5.6)
+        "ja": "ja", "zh": "zh", "ko": "ko", "en": "en"
     }
     selected_source = request.form.get("selected_source_lang", "Japanese (Manga)").lower()
     source_lang = source_lang_map.get(selected_source, "ja")
@@ -1069,7 +1096,10 @@ def upload_file():
     target_lang_map = {
         "english": "en", "vietnamese": "vi", "chinese": "zh", "korean": "ko",
         "thai": "th", "indonesian": "id", "french": "fr", "german": "de",
-        "spanish": "es", "russian": "ru"
+        "spanish": "es", "russian": "ru",
+        # data-value aliases (i18n spec §5.6)
+        "en": "en", "vi": "vi", "zh": "zh", "ko": "ko", "th": "th",
+        "id": "id", "fr": "fr", "de": "de", "es": "es", "ru": "ru"
     }
     selected_language = request.form.get("selected_language", "Vietnamese").lower()
     target_lang = target_lang_map.get(selected_language, "vi")
@@ -1078,7 +1108,10 @@ def upload_file():
         "default": "", "casual (thân mật)": "casual", "formal (trang trọng)": "formal",
         "keep honorifics (-san, senpai...)": "keep_honorifics",
         "web novel style": "web_novel", "action (ngắn gọn)": "action",
-        "literal (sát nghĩa)": "literal", "custom...": ""
+        "literal (sát nghĩa)": "literal", "custom...": "",
+        # data-value aliases (i18n spec §5.6)
+        "casual": "casual", "formal": "formal", "keep_honorifics": "keep_honorifics",
+        "web_novel": "web_novel", "action": "action", "literal": "literal", "custom": ""
     }
     selected_style = request.form.get("selected_style", "Default").lower()
     style = style_map.get(selected_style, "")
@@ -1088,7 +1121,11 @@ def upload_file():
     
     files = request.files.getlist("files")
     if not files or files[0].filename == '':
-        return render_template("index.html", error="Vui lòng chọn ít nhất 1 ảnh để dịch.")
+        return render_template(
+            "index.html",
+            error=t('backend.error.noImages'),
+            error_key='backend.error.noImages', error_params={},
+        )
     
     ocr_engine = ChromeLensOCR(ocr_language=source_lang)
     
@@ -1100,7 +1137,9 @@ def upload_file():
     if unsupported_files:
         return render_template(
             "index.html",
-            error=f"Chỉ hỗ trợ ảnh {SUPPORTED_IMAGE_FORMATS_LABEL}.",
+            error=t('backend.error.unsupportedFormat', formats=t('backend.formats')),
+            error_key='backend.error.unsupportedFormat',
+            error_params={'formats': t('backend.formats')},
         )
 
     for file in files:
@@ -1119,12 +1158,14 @@ def upload_file():
     if not all_images:
         return render_template(
             "index.html",
-            error=f"Không đọc được ảnh. Hãy thử file {SUPPORTED_IMAGE_FORMATS_LABEL} khác.",
+            error=t('backend.error.unreadableImage', formats=t('backend.formats')),
+            error_key='backend.error.unreadableImage',
+            error_params={'formats': t('backend.formats')},
         )
     
     # Phase 1: OCR all images (batch concurrent)
     print("\n[Phase 1] OCR full images with Chrome Lens...")
-    emit_progress('ocr', 0, len(all_images), 'Bắt đầu OCR toàn ảnh...')
+    emit_progress('ocr', 0, len(all_images), key='backend.progress.ocrStart')
 
     # Use batch processing when multiple images
     raw_images = [d['image'] for d in all_images]
@@ -1156,7 +1197,8 @@ def upload_file():
     
     ocr_blocks_count = sum(len(blocks) for _, _, blocks in all_ocr_results)
     print(f"OK OCR completed: {ocr_blocks_count} text blocks across {len(all_images)} images")
-    emit_progress('ocr', len(all_images), len(all_images), f'OCR hoàn tất: {ocr_blocks_count} text blocks')
+    emit_progress('ocr', len(all_images), len(all_images),
+                  key='backend.progress.ocrDone', params={'n': ocr_blocks_count})
     
     # If manual correction is enabled, store session and redirect to correction page
     if manual_correction:
@@ -1223,7 +1265,7 @@ def _do_full_pipeline(all_images, all_ocr_results, all_texts,
         print(f"Local LLM: {copilot_server} / model: {copilot_model}")
     
     elif selected_translator == "google":
-        print(f"Using Google Translate")
+        print("Using Google translation service")
     
     original_images_by_name = snapshot_original_images(all_ocr_results)
 
@@ -1366,7 +1408,7 @@ def continue_translate():
     all_images = [{'image': img, 'name': name} for name, img, _ in new_ocr_results]
     
     if not all_texts:
-        emit_progress('done', 0, 0, 'Không có text để dịch')
+        emit_progress('done', 0, 0, key='backend.progress.noText')
         processed_results = [{'name': name, 'image': image} for name, image, _ in new_ocr_results]
         original_images_by_name = {name: image for name, image, _ in new_ocr_results}
         processed_images = build_result_images(processed_results, original_images_by_name)
@@ -1614,7 +1656,7 @@ def styleditor_prepare():
     if not all_texts:
         # No text at all: behave like V2 /continue-translate (straight to the
         # results page, spec A1.8).
-        emit_progress('done', 0, 0, 'Không có text để dịch')
+        emit_progress('done', 0, 0, key='backend.progress.noText')
         processed_results = [{'name': name, 'image': image} for name, image, _ in new_ocr_results]
         original_images_by_name = {name: image for name, image, _ in new_ocr_results}
         processed_images = build_result_images(processed_results, original_images_by_name)
@@ -1637,7 +1679,9 @@ def styleditor_prepare():
         # (spec F1.5/A10.3).
         print(f"[styleditor-prepare] translator init failed: {exc}")
         translated_texts = all_texts
-        warning = f"Lỗi dịch: {exc}"
+        warning = WarningMessage(
+            key='backend.error.translationFailed', params={'error': str(exc)}
+        )
 
     default_font = session_data.get('selected_font', 'animeace_')
     default_style = {
@@ -2249,8 +2293,9 @@ def rerender_image():
 def translate_result_page(session_id):
     """Show the latest persisted results page for a correction session.
 
-    Used by the post-render editor's "Về kết quả" / cancel buttons (spec §2.3
-    footer). Reads page_*_rendered.jpg when available, else the original.
+    Used by the post-render editor's back-to-results and cancel buttons
+    (spec §2.3 footer). Reads page_*_rendered.jpg when available, else the
+    original.
     """
     session_data = load_session(session_id)
     if session_data is None:
