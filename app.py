@@ -2089,6 +2089,31 @@ def rerender_image():
             block_entry["style"] = style
         blocks.append(block_entry)
 
+    # "Lưu tất cả" sends an empty block list for images the user never opened
+    # (no local draft). Fall back to the V3 draft (translated text + default
+    # styles) so every image gets rendered with its translation — otherwise
+    # the results page would show the raw original (untranslated) image.
+    if not blocks and isinstance(session_data.get("v3_draft"), dict):
+        draft_images = session_data["v3_draft"].get("images") or []
+        if isinstance(draft_images, list) and 0 <= image_idx < len(draft_images):
+            for db in draft_images[image_idx].get("blocks") or []:
+                if not isinstance(db, dict):
+                    continue
+                bbox = normalize_bbox_for_json(
+                    db.get("bbox"), image_shape=(h, w), expand_ratio=0
+                )
+                if not bbox:
+                    continue
+                style = normalize_block_style(db.get("style"), default_font)
+                block_entry = {
+                    "text": str(db.get("text", "") or ""),
+                    "translated": str(db.get("translated", "") or "").strip(),
+                    "bbox": bbox,
+                }
+                if style is not None:
+                    block_entry["style"] = style
+                blocks.append(block_entry)
+
     deleted_regions = [
         region for region in (
             normalize_bbox_for_json(r, image_shape=(h, w), expand_ratio=0)
@@ -2236,6 +2261,11 @@ def translate_result_page(session_id):
     original_images_by_name = {}
     for idx, (name, original_image, _) in enumerate(all_ocr_results):
         rendered_image = _load_rendered_image(session_id, idx, original_image)
+        if rendered_image is None:
+            # Not rendered yet: show the erased-text background (V3 prepare
+            # already removed the original text) instead of the raw original,
+            # so the results page never shows untranslated source text.
+            rendered_image = _load_erased_image(session_id, idx, original_image)
         if rendered_image is None:
             rendered_image = original_image
         processed_results.append({"name": name, "image": rendered_image})

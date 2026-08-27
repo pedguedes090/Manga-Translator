@@ -1029,3 +1029,86 @@ def test_postrender_page_style_pass_through(monkeypatch, tmp_path, no_vision):
     response = client.get("/postrender/%s?img=0" % session_id)
     assert response.status_code == 200
     assert "Yuki-Burobu" in response.get_data(as_text=True)
+
+
+
+# ── Save-all / results-page fixes ────────────────────────────────────────────
+
+def test_rerender_empty_blocks_falls_back_to_v3_draft(
+    monkeypatch, tmp_path, no_vision, guard_translator
+):
+    """'Lưu tất cả' sends blocks_json=[] for images the user never opened; the
+    server must fall back to v3_draft (translated + style) so every image gets
+    rendered instead of showing the raw original (untranslated) source image.
+    """
+    session_id, _ = _make_session(monkeypatch, tmp_path, n_images=2, with_render_plan=False)
+    session_data = app_module.load_session(session_id)
+    session_data["v3_draft"] = {
+        "images": [
+            {
+                "name": "page0",
+                "blocks": [
+                    {"text": "text-0", "translated": "Draft bản 0",
+                     "bbox": [2, 2, 30, 12],
+                     "style": {"font": "Yuki-Burobu", "font_size": 14,
+                               "text_color": "#E53935", "bold": False,
+                               "italic": False, "align": "center"}},
+                ],
+            },
+            {
+                "name": "page1",
+                "blocks": [
+                    {"text": "text-1", "translated": "Draft bản 1",
+                     "bbox": [2, 2, 30, 12], "style": None},
+                ],
+            },
+        ]
+    }
+    app_module._save_session(session_id, session_data)
+    client = flask_app.test_client()
+    response = client.post("/re-render-image", data={
+        "session_id": session_id,
+        "image_idx": "1",
+        "blocks_json": "[]",
+        "erase_regions_json": "[]",
+        "deleted_regions_json": "[]",
+    })
+    assert response.status_code == 200
+    blocks = response.get_json()["blocks"]
+    assert blocks and blocks[0]["translated"] == "Draft bản 1"
+
+
+def test_translate_result_falls_back_to_erased_not_original(
+    monkeypatch, tmp_path, no_vision
+):
+    """Results page must show the erased-text background (V3 prepare output)
+    for images that were never rendered — never the raw original with the
+    untranslated source text still visible.
+    """
+    session_id, images = _make_session(monkeypatch, tmp_path, n_images=2, with_render_plan=False)
+    session_data = app_module.load_session(session_id)
+    session_data["v3_draft"] = {"images": [
+        {"name": "page0", "blocks": []},
+        {"name": "page1", "blocks": []},
+    ]}
+    app_module._save_session(session_id, session_data)
+    # Save an erased jpeg for page 0 that differs from the original
+    erased = images[0].copy()
+    erased[3:5, 3:29] = 250  # remove the dark bars -> visibly different
+    app_module._save_erased_jpeg(session_id, 0, erased)
+    client = flask_app.test_client()
+    page = client.get("/translate-result/%s" % session_id)
+    assert page.status_code == 200
+    html = page.get_data(as_text=True)
+    # the erased background must be embedded (original page0 has dark bars;
+    # erased version has light pixels in the bbox area)
+    import re as _re
+    srcs = _re.findall(r'src="data:image/jpeg;base64,([A-Za-z0-9+/=]+)"', html)
+    assert srcs, "translate-result must embed result images"
+    import base64 as _b64
+    import io as _io
+    img0 = cv2.imdecode(np.frombuffer(_b64.b64decode(srcs[0]), np.uint8), cv2.IMREAD_COLOR)
+    assert img0 is not None
+    patch = img0[3:5, 3:29]
+    assert float(patch.mean()) > 100, "served image should be the ERASED version (light), not the original with dark text bars"
+

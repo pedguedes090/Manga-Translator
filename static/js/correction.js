@@ -1502,7 +1502,18 @@
         } else {
             state = readDraftState(idx);
         }
-        if (!state) return null;
+        if (!state) {
+            // No local draft (image never opened): send an empty block list and
+            // let the server fall back to v3_draft (translated + default style).
+            return {
+                session_id: sessionId,
+                image_idx: String(idx),
+                idx: idx,
+                blocks_json: '[]',
+                erase_regions_json: '[]',
+                deleted_regions_json: '[]'
+            };
+        }
         const payload = {
             session_id: sessionId,
             image_idx: String(idx),
@@ -1519,12 +1530,21 @@
     function saveAllStyleditor() {
         const curImg = images[currentImageIdx];
         const badges = readDirtyBadges();
+        // Render EVERY image of the session: images the user edited carry a
+        // local draft (or live state), untouched images fall back to the
+        // server-side v3_draft (translated text + default styles). Rendering
+        // only dirty images would leave the results page showing the raw
+        // original (with untranslated source text) for every other image.
         const dirty = [];
-        if (curImg && curImg.dirty) dirty.push(globalImageIdx);
-        Object.keys(badges).forEach(k => {
-            const idx = parseInt(k, 10);
-            if (!isNaN(idx) && idx !== globalImageIdx && badges[k] && readDraftState(idx)) dirty.push(idx);
-        });
+        for (let i = 0; i < allImages.length; i++) {
+            if (i === globalImageIdx) {
+                if (curImg && curImg.dirty) dirty.push(i);
+            } else if (badges[i] && readDraftState(i)) {
+                dirty.push(i);
+            } else {
+                dirty.push(i);
+            }
+        }
         if (!dirty.length) {
             window.location.href = '/translate-result/' + sessionId;
             return;
