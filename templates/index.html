@@ -1,43 +1,105 @@
 <!DOCTYPE html>
 <html lang="{{ current_locale }}">
-
 <head>
    <meta charset="UTF-8">
    <meta name="viewport" content="width=device-width, initial-scale=1.0">
    <meta name="description" content="{{ t('index.hero.subtitle') }}">
+   <meta name="theme-color" content="#201525">
    <link rel="preconnect" href="https://fonts.googleapis.com">
    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-   <title>Manga Translator — {{ t('index.hero.title') }}</title>
+   <title>{{ t('index.pageTitle') }}</title>
    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-   <link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,100..900;1,100..900&display=swap"
-      rel="stylesheet">
+   <link href="https://fonts.googleapis.com/css2?family=Exo+2:ital,wght@0,400;0,500;0,600;0,700;0,800;1,600&display=swap" rel="stylesheet">
    <script id="i18n-data" type="application/json">{{ i18n_json | safe }}</script>
    <script src="{{ url_for('static', filename='js/i18n.js') }}"></script>
 </head>
-
 <body>
+   <!--
+   THESIS: A manga prepress proof desk makes OCR-to-render visible; it refuses the generic centered SaaS hero and floating glass cards.
+   OWN-WORLD: Paper white, registration violet, carbon ink, halftone fields, crop marks, and disciplined proof-sheet controls.
+   STORY: See a page transformed, then complete the same three-stage production path: upload, direct, translate.
+   FIRST VIEWPORT: Copy and an annotated before/after manga proof share the opening; the task workspace begins immediately below.
+   FORM: Manga prepress light table, grounded candidate 7, seed 4f7225eb.
+   FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+   -->
    <header class="site-header">
-      <a href="/" class="brand" aria-label="Manga Translator">
-         <img src="{{ url_for('static', filename='img/logo.png') }}" alt="Manga Translator" class="brand-logo">
+      <a href="/" class="brand" aria-label="{{ t('common.brandHomeAria') }}">
+         <img src="{{ url_for('static', filename='img/logo.png') }}" alt="{{ t('common.brand') }}" class="brand-logo">
       </a>
+      <span class="header-status" aria-hidden="true"><span></span>{{ t('index.header.pipeline') }}</span>
    </header>
 
    <main class="home-main">
-      <!-- Hero -->
-      <section class="hero">
-         <span class="hero-badge">{{ t('index.hero.badge') }}</span>
-         <h1 class="hero-title">{{ t('index.hero.title') }}</h1>
-         <p class="hero-subtitle">{{ t('index.hero.subtitle') }}</p>
-         <ul class="feature-chips" aria-label="Features">
-            <li class="chip">🔍 {{ t('index.feature.ocr') }}</li>
-            <li class="chip">🤖 {{ t('index.feature.translators') }}</li>
-            <li class="chip">🎨 {{ t('index.feature.editor') }}</li>
-            <li class="chip">🌐 {{ t('index.feature.multilingual') }}</li>
-         </ul>
+      <section class="hero" aria-labelledby="hero-title">
+         <div class="hero-copy">
+            <h1 class="hero-title" id="hero-title">{{ t('index.hero.title') }}</h1>
+            <p class="hero-subtitle">{{ t('index.hero.subtitle') }}</p>
+            <a class="hero-action" href="#translator-workspace">
+               {{ t('index.hero.cta') }}
+               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </a>
+            <ul class="feature-chips" aria-label="{{ t('index.featuresAria') }}">
+               <li class="chip">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V4h3M17 4h3v3M20 17v3h-3M7 20H4v-3M8 9h8M8 12h6M8 15h8"/></svg>
+                  {{ t('index.feature.ocr') }}
+               </li>
+               <li class="chip">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h8v6H5zM11 13h8v6h-8M13 8h4l2 2-2 2M11 16H7l-2-2 2-2"/></svg>
+                  {{ t('index.feature.translators') }}
+               </li>
+               <li class="chip">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19l4.5-1 9.8-9.8-3.5-3.5L5 14.5 4 19zM13.5 6l3.5 3.5M4 21h16"/></svg>
+                  {{ t('index.feature.editor') }}
+               </li>
+            </ul>
+         </div>
+
+         <div class="proof-stage" role="img" aria-label="{{ t('index.hero.demoAria') }}">
+            <span class="crop-mark crop-mark-tl"></span>
+            <span class="crop-mark crop-mark-tr"></span>
+            <span class="crop-mark crop-mark-bl"></span>
+            <span class="crop-mark crop-mark-br"></span>
+            <div class="proof-meta">
+               <span>{{ t('index.hero.proofLabel') }}</span>
+               <span>{{ t('index.hero.proofPage') }}</span>
+            </div>
+            <div class="proof-pages">
+               <article class="proof-page proof-source">
+                  <span class="proof-tag">{{ t('index.hero.source') }}</span>
+                  <div class="manga-frame">
+                     <div class="speed-lines" aria-hidden="true"></div>
+                     <div class="speech-bubble speech-source">{{ t('index.hero.sourceText') }}</div>
+                  </div>
+               </article>
+               <div class="proof-transfer" aria-hidden="true">
+                  <span></span>
+                  <svg viewBox="0 0 24 24"><path d="M4 12h15M14 7l5 5-5 5"/></svg>
+               </div>
+               <article class="proof-page proof-target">
+                  <span class="proof-tag">{{ t('index.hero.translated') }}</span>
+                  <div class="manga-frame">
+                     <div class="tone-field" aria-hidden="true"></div>
+                     <div class="speech-bubble speech-target">{{ t('index.hero.targetText') }}</div>
+                  </div>
+               </article>
+            </div>
+            <ol class="proof-pipeline" aria-label="{{ t('index.hero.pipelineAria') }}">
+               <li><span>01</span>{{ t('index.hero.pipelineOcr') }}</li>
+               <li><span>02</span>{{ t('index.hero.pipelineTranslate') }}</li>
+               <li><span>03</span>{{ t('index.hero.pipelineRender') }}</li>
+            </ol>
+         </div>
       </section>
 
-      <!-- Translator card -->
-      <section class="translator-card" aria-label="Translator">
+      <section class="translator-card" id="translator-workspace" aria-labelledby="workspace-title">
+         <div class="workspace-heading">
+            <div>
+               <h2 id="workspace-title">{{ t('index.workspace.title') }}</h2>
+               <p>{{ t('index.workspace.subtitle') }}</p>
+            </div>
+            <div class="workspace-mark" aria-hidden="true"><span></span><span></span><span></span></div>
+         </div>
+
          {% if error_key %}
          <div class="form-error" role="alert">{{ t(error_key, **(error_params or {})) }}</div>
          {% elif error %}
@@ -45,226 +107,190 @@
          {% endif %}
 
          <form action="/translate" method="post" enctype="multipart/form-data" onsubmit="return updateHiddenInputs()">
-
-            <!-- Step 1: images -->
-            <div class="step-block">
-               <h2 class="step-title"><span class="step-num">1</span> {{ t('index.section.upload') }}</h2>
-               <input id="file-upload" type="file" name="files"
-                  accept=".jpg, .jpeg, .png, .webp, .bmp, .tif, .tiff, .avif" multiple required>
-               <label for="file-upload" class="dropzone" id="file-label">
-                  <span class="dz-icon" aria-hidden="true">🖼️</span>
-                  <span id="file-text" class="dz-text">{{ t('index.fileLabel.chooseMany') }}</span>
-                  <span class="dz-hint">{{ t('index.dropzone.hint') }}</span>
-                  <span class="dz-formats">{{ t('index.dropzone.formats') }}</span>
-               </label>
-               <div id="file-list" class="file-list"></div>
-            </div>
-
-            <!-- Step 2: configure -->
-            <div class="step-block">
-               <h2 class="step-title"><span class="step-num">2</span> {{ t('index.section.configure') }}</h2>
-               <div class="form-grid">
-                  <div class="select-wrapper">
-                     <label class="translator-label">{{ t('index.label.sourceLang') }}</label>
-                     <div class="custom-select" id="source_lang" tabindex="0">
-                        <div class="select-box">
-                           <span class="selected"></span>
-                           <span class="icon">&#9660;</span>
-                        </div>
-                        <div class="options">
-                           <span class="option" data-value="ja">Japanese (Manga)</span>
-                           <span class="option" data-value="zh">Chinese (Manhua)</span>
-                           <span class="option" data-value="ko">Korean (Manhwa)</span>
-                           <span class="option" data-value="en">English (Comic)</span>
-                        </div>
-                     </div>
-                  </div>
-
-                  <div class="select-wrapper">
-                     <label class="translator-label">{{ t('index.label.targetLang') }}</label>
-                     <div class="custom-select" id="language" tabindex="0">
-                        <div class="select-box">
-                           <span class="selected"></span>
-                           <span class="icon">&#9660;</span>
-                        </div>
-                        <div class="options">
-                           <span class="option" data-value="vi">Vietnamese</span>
-                           <span class="option" data-value="en">English</span>
-                           <span class="option" data-value="zh">Chinese</span>
-                           <span class="option" data-value="ko">Korean</span>
-                           <span class="option" data-value="th">Thai</span>
-                           <span class="option" data-value="id">Indonesian</span>
-                           <span class="option" data-value="fr">French</span>
-                           <span class="option" data-value="de">German</span>
-                           <span class="option" data-value="es">Spanish</span>
-                           <span class="option" data-value="ru">Russian</span>
-                        </div>
-                     </div>
-                  </div>
-
-                  <div class="select-wrapper">
-                     <label class="translator-label">{{ t('index.label.translator') }}</label>
-                     <div class="custom-select" id="translator" tabindex="0">
-                        <div class="select-box">
-                           <span class="selected"></span>
-                           <span class="icon">&#9660;</span>
-                        </div>
-                        <div class="options">
-                           <span class="option" data-value="gemini">Gemini</span>
-                           <span class="option" data-value="copilot">Local LLM</span>
-                           <span class="option" data-value="google">Google</span>
-                        </div>
-                     </div>
-                  </div>
-
-                  <div class="select-wrapper">
-                     <label class="translator-label">{{ t('index.label.style') }}</label>
-                     <div class="custom-select" id="style" tabindex="0">
-                        <div class="select-box">
-                           <span class="selected"></span>
-                           <span class="icon">&#9660;</span>
-                        </div>
-                        <div class="options">
-                           <span class="option" data-value="default">{{ t('index.option.styleDefault') }}</span>
-                           <span class="option" data-value="casual">{{ t('index.option.styleCasual') }}</span>
-                           <span class="option" data-value="formal">{{ t('index.option.styleFormal') }}</span>
-                           <span class="option" data-value="keep_honorifics">{{ t('index.option.styleKeepHonorifics') }}</span>
-                           <span class="option" data-value="web_novel">{{ t('index.option.styleWebNovel') }}</span>
-                           <span class="option" data-value="action">{{ t('index.option.styleAction') }}</span>
-                           <span class="option" data-value="literal">{{ t('index.option.styleLiteral') }}</span>
-                           <span class="option" data-value="custom">{{ t('index.option.styleCustom') }}</span>
-                        </div>
-                     </div>
-                  </div>
-
-                  <div class="select-wrapper">
-                     <label class="translator-label">{{ t('index.label.font') }}</label>
-                     <div class="custom-select" id="font" tabindex="0">
-                        <div class="select-box">
-                           <span class="selected"></span>
-                           <span class="icon">&#9660;</span>
-                        </div>
-                        <div class="options">
-                           <span class="option">Animeace</span>
-                           <span class="option">Mangat</span>
-                           <span class="option">Arial</span>
-                           <span class="option">Yuki-Arenzi</span>
-                           <span class="option">Yuki-Burobu</span>
-                           <span class="option">Yuki-CCMarianChurchlandJournal</span>
-                           <span class="option">Yuki-CDX Starstreak</span>
-                           <span class="option">Yuki-CHICKEN Pie</span>
-                           <span class="option">Yuki-CrashLanding BB</span>
-                           <span class="option">Yuki-Downhill Dive</span>
-                           <span class="option">Yuki-Gingerline DEMO Regular</span>
-                           <span class="option">Yuki-Gorrilaz_Story</span>
-                           <span class="option">Yuki-KG Only Angel</span>
-                           <span class="option">Yuki-LF SwandsHand</span>
-                           <span class="option">Yuki-La Belle Aurore</span>
-                           <span class="option">Yuki-Little Cupcakes</span>
-                           <span class="option">Yuki-Nagurigaki Crayon</span>
-                           <span class="option">Yuki-Ripsnort BB</span>
-                           <span class="option">Yuki-Roasthink</span>
-                           <span class="option">Yuki-Screwball</span>
-                           <span class="option">Yuki-Shark Crash</span>
-                           <span class="option">Yuki-Skulduggery</span>
-                           <span class="option">Yuki-Superscratchy</span>
-                           <span class="option">Yuki-Tea And Oranges Regular</span>
-                        </div>
-                     </div>
-                  </div>
-
-                  <div class="select-wrapper">
-                     <div class="manual-toggle-row">
-                        <label class="toggle-switch">
-                           <input type="checkbox" id="manual_correction" name="manual_correction" value="on">
-                           <span class="toggle-slider"></span>
-                        </label>
-                        <div class="toggle-text">
-                           <span class="toggle-label">{{ t('index.label.manualCorrection') }}</span>
-                           <small class="toggle-hint">{{ t('index.hint.manualCorrection') }}</small>
-                        </div>
-                     </div>
+            <section class="step-block" aria-labelledby="step-upload-title">
+               <div class="step-heading">
+                  <span class="step-num" aria-hidden="true">1</span>
+                  <div>
+                     <h3 class="step-title" id="step-upload-title">{{ t('index.section.upload') }}</h3>
+                     <p class="step-description">{{ t('index.section.uploadHint') }}</p>
                   </div>
                </div>
-
-               <!-- Custom Prompt -->
-               <div class="select-wrapper full-width" id="custom-prompt-wrapper" style="display: none;">
-                  <label class="translator-label">{{ t('index.label.customPrompt') }}</label>
-                  <textarea id="custom_prompt" name="custom_prompt"
-                     placeholder="{{ t('index.placeholder.customPrompt') }}" rows="2"></textarea>
+               <div class="step-content">
+                  <input id="file-upload" type="file" name="files" accept=".jpg, .jpeg, .png, .webp, .bmp, .tif, .tiff, .avif" multiple required>
+                  <label for="file-upload" class="dropzone" id="file-label">
+                     <span class="upload-symbol" aria-hidden="true">
+                        <svg viewBox="0 0 32 32"><path d="M6 5h20v22H6zM10 19l4-4 4 4 3-3 3 3M16 8v6M13 11l3-3 3 3"/></svg>
+                     </span>
+                     <span class="dz-copy">
+                        <span id="file-text" class="dz-text">{{ t('index.fileLabel.chooseMany') }}</span>
+                        <span class="dz-hint">{{ t('index.dropzone.hint') }}</span>
+                     </span>
+                     <span class="dz-formats">{{ t('index.dropzone.formats') }}</span>
+                  </label>
+                  <div id="file-list" class="file-list" aria-live="polite"></div>
                </div>
+            </section>
 
-               <!-- Local LLM Settings -->
-               <div id="copilot-settings" style="display: none; width: 100%;">
+            <section class="step-block" aria-labelledby="step-config-title">
+               <div class="step-heading">
+                  <span class="step-num" aria-hidden="true">2</span>
+                  <div>
+                     <h3 class="step-title" id="step-config-title">{{ t('index.section.configure') }}</h3>
+                     <p class="step-description">{{ t('index.section.configureHint') }}</p>
+                  </div>
+               </div>
+               <div class="step-content">
+                  {% set source_options = [('ja', 'sourceJapanese'), ('zh', 'sourceChinese'), ('ko', 'sourceKorean'), ('en', 'sourceEnglish')] %}
+                  {% set target_options = [('vi', 'targetVietnamese'), ('en', 'targetEnglish'), ('zh', 'targetChinese'), ('ko', 'targetKorean'), ('th', 'targetThai'), ('id', 'targetIndonesian'), ('fr', 'targetFrench'), ('de', 'targetGerman'), ('es', 'targetSpanish'), ('ru', 'targetRussian')] %}
+                  {% set translator_options = [('gemini', 'translatorGemini'), ('copilot', 'translatorLocal'), ('google', 'translatorGoogle')] %}
+                  {% set font_options = [('animeace_', 'fontAnimeace'), ('mangat', 'fontMangat'), ('arial', 'fontArial'), ('Yuki-Arenzi', 'fontArenzi'), ('Yuki-Burobu', 'fontBurobu'), ('Yuki-CCMarianChurchlandJournal', 'fontMarian'), ('Yuki-CDX Starstreak', 'fontStarstreak'), ('Yuki-CHICKEN Pie', 'fontChickenPie'), ('Yuki-CrashLanding BB', 'fontCrashLanding'), ('Yuki-Downhill Dive', 'fontDownhillDive'), ('Yuki-Gingerline DEMO Regular', 'fontGingerline'), ('Yuki-Gorrilaz_Story', 'fontGorrilaz'), ('Yuki-KG Only Angel', 'fontOnlyAngel'), ('Yuki-LF SwandsHand', 'fontSwandsHand'), ('Yuki-La Belle Aurore', 'fontAurore'), ('Yuki-Little Cupcakes', 'fontCupcakes'), ('Yuki-Nagurigaki Crayon', 'fontNagurigaki'), ('Yuki-Ripsnort BB', 'fontRipsnort'), ('Yuki-Roasthink', 'fontRoasthink'), ('Yuki-Screwball', 'fontScrewball'), ('Yuki-Shark Crash', 'fontSharkCrash'), ('Yuki-Skulduggery', 'fontSkulduggery'), ('Yuki-Superscratchy', 'fontSuperscratchy'), ('Yuki-Tea And Oranges Regular', 'fontTeaOranges')] %}
+
                   <div class="form-grid">
                      <div class="select-wrapper">
-                        <label class="translator-label">{{ t('index.label.serverUrl') }}</label>
-                        <input type="text" id="copilot_server" name="copilot_server" value="http://localhost:8080"
-                           placeholder="http://localhost:11434 (Ollama)" class="text-input">
-                        <small class="field-hint">{{ t('index.hint.serverPorts') }}</small>
+                        <label class="translator-label" id="source-lang-label">{{ t('index.label.sourceLang') }}</label>
+                        <div class="custom-select" id="source_lang" tabindex="0" role="button" aria-labelledby="source-lang-label">
+                           <div class="select-box"><span class="selected"></span><span class="icon" aria-hidden="true"></span></div>
+                           <div class="options">
+                              {% for value, key in source_options %}<span class="option" data-value="{{ value }}">{{ t('index.option.' ~ key) }}</span>{% endfor %}
+                           </div>
+                        </div>
                      </div>
+
                      <div class="select-wrapper">
-                        <label class="translator-label">{{ t('index.label.modelName') }}</label>
-                        <input type="text" id="copilot_model_input" name="copilot_model_input" value="gpt-4.1"
-                           placeholder="llama3.2, qwen2.5, mistral..." class="text-input">
-                        <small class="field-hint">{{ t('index.hint.copilotModel') }}</small>
+                        <label class="translator-label" id="target-lang-label">{{ t('index.label.targetLang') }}</label>
+                        <div class="custom-select" id="language" tabindex="0" role="button" aria-labelledby="target-lang-label">
+                           <div class="select-box"><span class="selected"></span><span class="icon" aria-hidden="true"></span></div>
+                           <div class="options">
+                              {% for value, key in target_options %}<span class="option" data-value="{{ value }}">{{ t('index.option.' ~ key) }}</span>{% endfor %}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div class="select-wrapper">
+                        <label class="translator-label" id="translator-label">{{ t('index.label.translator') }}</label>
+                        <div class="custom-select" id="translator" tabindex="0" role="button" aria-labelledby="translator-label">
+                           <div class="select-box"><span class="selected"></span><span class="icon" aria-hidden="true"></span></div>
+                           <div class="options">
+                              {% for value, key in translator_options %}<span class="option" data-value="{{ value }}">{{ t('index.option.' ~ key) }}</span>{% endfor %}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div class="select-wrapper">
+                        <label class="translator-label" id="style-label">{{ t('index.label.style') }}</label>
+                        <div class="custom-select" id="style" tabindex="0" role="button" aria-labelledby="style-label">
+                           <div class="select-box"><span class="selected"></span><span class="icon" aria-hidden="true"></span></div>
+                           <div class="options">
+                              <span class="option" data-value="default">{{ t('index.option.styleDefault') }}</span>
+                              <span class="option" data-value="casual">{{ t('index.option.styleCasual') }}</span>
+                              <span class="option" data-value="formal">{{ t('index.option.styleFormal') }}</span>
+                              <span class="option" data-value="keep_honorifics">{{ t('index.option.styleKeepHonorifics') }}</span>
+                              <span class="option" data-value="web_novel">{{ t('index.option.styleWebNovel') }}</span>
+                              <span class="option" data-value="action">{{ t('index.option.styleAction') }}</span>
+                              <span class="option" data-value="literal">{{ t('index.option.styleLiteral') }}</span>
+                              <span class="option" data-value="custom">{{ t('index.option.styleCustom') }}</span>
+                           </div>
+                        </div>
+                     </div>
+
+                     <div class="select-wrapper">
+                        <label class="translator-label" id="font-label">{{ t('index.label.font') }}</label>
+                        <div class="custom-select" id="font" tabindex="0" role="button" aria-labelledby="font-label">
+                           <div class="select-box"><span class="selected"></span><span class="icon" aria-hidden="true"></span></div>
+                           <div class="options">
+                              {% for value, key in font_options %}<span class="option" data-value="{{ value }}">{{ t('index.option.' ~ key) }}</span>{% endfor %}
+                           </div>
+                        </div>
+                     </div>
+
+                     <div class="select-wrapper">
+                        <div class="manual-toggle-row">
+                           <label class="toggle-switch">
+                              <input type="checkbox" id="manual_correction" name="manual_correction" value="on">
+                              <span class="toggle-slider"></span>
+                           </label>
+                           <div class="toggle-text">
+                              <span class="toggle-label">{{ t('index.label.manualCorrection') }}</span>
+                              <small class="toggle-hint">{{ t('index.hint.manualCorrection') }}</small>
+                           </div>
+                        </div>
+                     </div>
+                  </div>
+
+                  <div class="select-wrapper full-width" id="custom-prompt-wrapper" style="display: none;">
+                     <label class="translator-label" for="custom_prompt">{{ t('index.label.customPrompt') }}</label>
+                     <textarea id="custom_prompt" name="custom_prompt" placeholder="{{ t('index.placeholder.customPrompt') }}" rows="3"></textarea>
+                  </div>
+
+                  <div id="copilot-settings" class="provider-settings" style="display: none; width: 100%;">
+                     <div class="provider-heading">{{ t('index.provider.localSettings') }}</div>
+                     <div class="form-grid">
+                        <div class="select-wrapper">
+                           <label class="translator-label" for="copilot_server">{{ t('index.label.serverUrl') }}</label>
+                           <input type="text" id="copilot_server" name="copilot_server" value="http://localhost:8080" placeholder="{{ t('index.placeholder.serverUrl') }}" class="text-input">
+                           <small class="field-hint">{{ t('index.hint.serverPorts') }}</small>
+                        </div>
+                        <div class="select-wrapper">
+                           <label class="translator-label" for="copilot_model_input">{{ t('index.label.modelName') }}</label>
+                           <input type="text" id="copilot_model_input" name="copilot_model_input" value="gpt-4.1" placeholder="{{ t('index.placeholder.localModel') }}" class="text-input">
+                           <small class="field-hint">{{ t('index.hint.copilotModel') }}</small>
+                        </div>
+                     </div>
+                  </div>
+
+                  <div id="gemini-settings" class="provider-settings" style="display: block; width: 100%;">
+                     <div class="provider-heading">{{ t('index.provider.geminiSettings') }}</div>
+                     <div class="form-grid">
+                        <div class="select-wrapper full-width">
+                           <label class="translator-label" for="gemini_model_input">{{ t('index.label.modelName') }}</label>
+                           <input type="text" id="gemini_model_input" name="gemini_model_input" value="gemini-3.1-flash-lite" placeholder="{{ t('index.placeholder.geminiModel') }}" class="text-input" autocomplete="off" spellcheck="false">
+                           <small class="field-hint">{{ t('index.hint.geminiModel') }}</small>
+                        </div>
+                        <div class="select-wrapper full-width">
+                           <label class="translator-label" for="gemini_api_key">{{ t('index.label.geminiApiKeys') }}</label>
+                           <textarea id="gemini_api_key" name="gemini_api_key" placeholder="{{ t('index.placeholder.geminiKeys') }}" rows="3" class="text-area"></textarea>
+                           <small class="field-hint">{{ t('index.hint.geminiKeysStorage') }}</small>
+                        </div>
                      </div>
                   </div>
                </div>
+            </section>
 
-               <!-- Gemini Settings -->
-               <div id="gemini-settings" style="display: block; width: 100%;">
-                  <div class="form-grid">
-                     <div class="select-wrapper full-width">
-                        <label class="translator-label" for="gemini_model_input">{{ t('index.label.modelName') }}</label>
-                        <input type="text" id="gemini_model_input" name="gemini_model_input"
-                           value="gemini-3.1-flash-lite" placeholder="gemini-3.1-flash-lite" class="text-input"
-                           autocomplete="off" spellcheck="false">
-                        <small class="field-hint">{{ t('index.hint.geminiModel') }}</small>
-                     </div>
-                     <div class="select-wrapper full-width">
-                        <label class="translator-label" for="gemini_api_key">{{ t('index.label.geminiApiKeys') }}</label>
-                        <textarea id="gemini_api_key" name="gemini_api_key"
-                           placeholder="{{ t('index.placeholder.geminiKeys') }}"
-                           rows="3" class="text-area"></textarea>
-                        <small class="field-hint">{{ t('index.hint.geminiKeysStorage') }}</small>
-                     </div>
+            <section class="step-block step-submit" aria-labelledby="step-translate-title">
+               <div class="step-heading">
+                  <span class="step-num" aria-hidden="true">3</span>
+                  <div>
+                     <h3 class="step-title" id="step-translate-title">{{ t('index.section.translate') }}</h3>
+                     <p class="step-description">{{ t('index.section.translateHint') }}</p>
                   </div>
                </div>
-            </div>
-
-            <!-- Step 3: translate -->
-            <div class="step-block">
-               <h2 class="step-title"><span class="step-num">3</span> {{ t('index.section.translate') }}</h2>
-               <input type="hidden" id="selected_source_lang" name="selected_source_lang">
-               <input type="hidden" id="selected_language" name="selected_language">
-               <input type="hidden" id="selected_translator" name="selected_translator">
-               <input type="hidden" id="selected_style" name="selected_style">
-               <input type="hidden" id="selected_font" name="selected_font">
-               <button type="submit" class="submit-btn">
-                  <span class="submit-label">{{ t('index.submit') }}</span>
-                  <span class="submit-arrow" aria-hidden="true">→</span>
-               </button>
-            </div>
+               <div class="step-content">
+                  <input type="hidden" id="selected_source_lang" name="selected_source_lang">
+                  <input type="hidden" id="selected_language" name="selected_language">
+                  <input type="hidden" id="selected_translator" name="selected_translator">
+                  <input type="hidden" id="selected_style" name="selected_style">
+                  <input type="hidden" id="selected_font" name="selected_font">
+                  <button type="submit" class="submit-btn">
+                     <span class="submit-label">{{ t('index.submit') }}</span>
+                     <span class="submit-arrow" aria-hidden="true">
+                        <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                     </span>
+                  </button>
+                  <p class="submit-note">{{ t('index.submitNote') }}</p>
+               </div>
+            </section>
          </form>
 
-         <!-- Progress -->
-         <div id="progress-container" class="progress-container" style="display: none;">
-            <div id="progress-phase" class="progress-phase"></div>
-            <div class="progress-track">
-               <div id="progress-bar" class="progress-bar"></div>
-            </div>
-            <div id="progress-text" class="progress-text"></div>
+         <div id="progress-container" class="progress-container" style="display: none;" aria-live="polite">
+            <div class="progress-head"><div id="progress-phase" class="progress-phase"></div><div id="progress-text" class="progress-text"></div></div>
+            <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
          </div>
-
          <img id="loading-img" src="{{ url_for('static', filename='img/loading.gif') }}" alt="" class="loading-img">
          <p id="loading-p" class="loading-p">{{ t('index.loading') }}</p>
       </section>
    </main>
 
-   <footer class="site-footer">
-      <span>Manga Translator</span>
-   </footer>
+   <footer class="site-footer"><span>{{ t('index.footer') }}</span></footer>
 
    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
@@ -275,7 +301,6 @@
          const progressBar = document.getElementById('progress-bar');
          const progressText = document.getElementById('progress-text');
          const progressPhase = document.getElementById('progress-phase');
-
          const phaseNames = {
             'ocr': I18N.t('index.phase.ocr'),
             'translation': I18N.t('index.phase.translation'),
@@ -290,18 +315,14 @@
                phaseNames.done = I18N.t('index.phase.done');
             });
          }
-
          socket.on('progress', function (data) {
             progressContainer.style.display = 'block';
             const phaseName = phaseNames[data.phase] || data.phase;
             progressPhase.textContent = phaseName;
             progressBar.style.width = data.percent + '%';
             progressText.textContent = data.key ? I18N.t(data.key, data.params || {}) : data.message;
-            if (data.phase === 'done') {
-               progressBar.classList.add('done');
-            }
+            if (data.phase === 'done') progressBar.classList.add('done');
          });
-
          document.querySelector('form').addEventListener('submit', function () {
             progressContainer.style.display = 'block';
             progressBar.style.width = '0%';
@@ -312,5 +333,4 @@
       });
    </script>
 </body>
-
 </html>
