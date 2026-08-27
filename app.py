@@ -1831,10 +1831,26 @@ def styleditor_page(session_id):
     if erase_mask:
         image_data["erase_mask"] = erase_mask
     total_blocks = sum(len(img.get("blocks", [])) for img in draft_images)
-    all_images = [
-        {"name": str(img.get("name") or ("page%d" % i)), "idx": i}
-        for i, img in enumerate(draft_images)
-    ]
+    # Sidebar thumbnails: send a small b64 preview for EVERY page so the left
+    # list shows the real erased image (not a placeholder) for non-current
+    # pages too. Reuse the erased jpeg when present, else the original image.
+    all_images = []
+    for i, img in enumerate(draft_images):
+        thumb_name = str(img.get("name") or ("page%d" % i))
+        thumb_img = _load_erased_image(session_id, i, all_ocr_results[i][1] if i < len(all_ocr_results) else None)
+        if thumb_img is None and i < len(all_ocr_results):
+            thumb_img = all_ocr_results[i][1]
+        thumb_data = None
+        if thumb_img is not None:
+            th, tw = thumb_img.shape[:2]
+            max_side = 320
+            scale = min(1.0, max_side / max(th, tw))
+            if scale < 1.0:
+                thumb_img = cv2.resize(thumb_img, (max(1, int(tw * scale)), max(1, int(th * scale))), interpolation=cv2.INTER_AREA)
+            ok, buf = cv2.imencode(".jpg", thumb_img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                thumb_data = base64.b64encode(buf.tobytes()).decode("utf-8")
+        all_images.append({"name": thumb_name, "idx": i, "data": thumb_data})
     return render_template(
         "correction.html",
         session_id=session_id,

@@ -239,6 +239,22 @@
         });
     }
 
+    // V3 styleditor: the sidebar shows a small preview for EVERY page. The
+    // server sends per-page thumbnail data in allImages[idx].data (main canvas
+    // only carries the current page), so thumbnails load from there.
+    function loadThumbImage(idx) {
+        const key = 'thumb:' + idx;
+        if (imageCache[key]) return Promise.resolve(imageCache[key]);
+        const src = (isStyleditor && allImages[idx] && allImages[idx].data) ? allImages[idx].data : (images[idx] ? images[idx].data : '');
+        return new Promise((resolve) => {
+            if (!src) { resolve(null); return; }
+            const img = new Image();
+            img.onload = () => { imageCache[key] = img; resolve(img); };
+            img.onerror = () => resolve(null);
+            img.src = 'data:image/jpeg;base64,' + src;
+        });
+    }
+
     function getBlocks(idx) { return images[idx] ? images[idx].blocks : []; }
     function setBlocks(idx, blocks) { images[idx].blocks = blocks; }
     function getCurrentBlocks() { return getBlocks(currentImageIdx); }
@@ -1717,7 +1733,8 @@
     function updateThumbnails() {
         const items = thumbnails();
         items.forEach(el => el.classList.remove('active'));
-        const active = document.querySelector('.thumb-item[data-index="' + currentImageIdx + '"]');
+        const activeIdx = isStyleditor ? navImageIdx() : currentImageIdx;
+        const active = document.querySelector('.thumb-item[data-index="' + activeIdx + '"]');
         if (active) {
             active.classList.add('active');
             active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -1743,7 +1760,7 @@
     }
 
     function renderThumbnail(idx) {
-        loadImage(idx).then(img => {
+        loadThumbImage(idx).then(img => {
             const el = document.querySelector('.thumb-item[data-index="' + idx + '"]');
             if (!el) return;
             const tc = el.querySelector('.thumb-canvas');
